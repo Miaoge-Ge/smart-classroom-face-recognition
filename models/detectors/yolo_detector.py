@@ -52,10 +52,13 @@ class YOLOFaceDetector:
             src_pts = detected_pts[[1, 2, 0]]
             dst_pts = standard_pts[[0, 1, 2]]
             transform_matrix, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts)
-        else:
-            reordered_pts = detected_pts[[3, 4, 2, 0, 1]]
-            
+        elif detected_pts.shape[0] >= 5:
+            reordered_pts = detected_pts[[3, 4, 2, 0, 1]] if detected_pts.shape[0] == 5 else detected_pts[:5]
             transform_matrix, _ = cv2.estimateAffinePartial2D(reordered_pts, standard_pts)
+        else:
+            # 如果关键点不足，直接返回原图像（不做对齐）
+            h, w = image.shape[:2]
+            return cv2.resize(image, (output_size, output_size))
 
         aligned_face = cv2.warpAffine(
             image,

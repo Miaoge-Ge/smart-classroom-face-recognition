@@ -37,6 +37,7 @@ if (canvas) {
     let schedulerTimer = null;
     let tempCanvas = null;
     let tempCtx = null;
+    let activeTaskId = null;
 
     canvas.width = runtimeSettings.capture.width;
     canvas.height = runtimeSettings.capture.height;
@@ -44,7 +45,10 @@ if (canvas) {
     if (startBtn) startBtn.addEventListener('click', startCamera);
     if (stopBtn) stopBtn.addEventListener('click', stopCamera);
     if (cameraSelect) cameraSelect.addEventListener('change', onCameraChange);
-    if (courseSelect) courseSelect.addEventListener('change', () => resetStatsUI());
+    if (courseSelect) courseSelect.addEventListener('change', () => {
+        activeTaskId = null;
+        resetStatsUI();
+    });
 
     if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
         navigator.mediaDevices.addEventListener('devicechange', () => refreshCameraList(true));
@@ -58,6 +62,33 @@ if (canvas) {
             if (!res.ok) return;
             const data = await res.json();
             if (data && data.capture) runtimeSettings = data;
+        } catch (_) { }
+    }
+
+    function getQueryParam(name) {
+        try {
+            const u = new URL(window.location.href);
+            return u.searchParams.get(name);
+        } catch (_) {
+            return null;
+        }
+    }
+
+    async function bootstrapTaskFromUrl() {
+        const tid = getQueryParam('task_id');
+        if (!tid) return;
+        const n = Number(tid);
+        if (!Number.isFinite(n) || n <= 0) return;
+        activeTaskId = Math.trunc(n);
+        try {
+            const res = await fetch('/api/attendance_tasks', { method: 'GET' });
+            if (!res.ok) return;
+            const data = await res.json();
+            const tasks = data && Array.isArray(data.tasks) ? data.tasks : [];
+            const t = tasks.find(x => Number(x.task_id) === activeTaskId);
+            if (t && courseSelect && t.course_id != null) {
+                courseSelect.value = String(t.course_id);
+            }
         } catch (_) { }
     }
 
@@ -306,7 +337,7 @@ if (canvas) {
         const dataURL = tempCanvas.toDataURL('image/jpeg', jpegQuality);
         const courseId = courseSelect ? courseSelect.value : '';
         lastClientTs = Date.now();
-        ws.send(JSON.stringify({ image: dataURL, course_id: courseId, client_ts: lastClientTs }));
+        ws.send(JSON.stringify({ image: dataURL, course_id: courseId, task_id: activeTaskId, client_ts: lastClientTs }));
         sendState = 'SENDING';
         inFlight = true;
         inFlightSince = lastClientTs;
@@ -325,6 +356,11 @@ if (canvas) {
     async function startCamera() {
         try {
             if (!ensureCameraConsent()) return;
+            const courseId = courseSelect ? courseSelect.value : '';
+            if (!courseId && !activeTaskId) {
+                alert('请先选择课程');
+                return;
+            }
             await loadRuntimeSettings();
             await openStream(cameraSelect ? cameraSelect.value : '');
             await refreshCameraList(true);
@@ -451,6 +487,7 @@ if (canvas) {
     }
 
     refreshCameraList(true);
+    bootstrapTaskFromUrl();
 }
 
 const printHistoryBtn = document.getElementById('printHistoryBtn');

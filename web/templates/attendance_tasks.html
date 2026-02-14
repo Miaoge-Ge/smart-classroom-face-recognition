@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+    <h2 class="mb-0">考勤任务</h2>
+</div>
+
+<div class="card shadow mb-3">
+    <div class="card-body">
+        <form class="row g-2 align-items-end" method="post" action="/api/attendance_tasks">
+            <div class="col-md-4">
+                <label class="form-label small text-muted">任务名称</label>
+                <input class="form-control" type="text" name="title" placeholder="例如：软件工程 第3周 周一1-2节" required>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small text-muted">课程</label>
+                <select class="form-select" name="course_id" required>
+                    {% for c in courses %}
+                    <option value="{{ c.course_id }}">{{ c.course_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small text-muted">班级</label>
+                <select class="form-select" name="class_names" multiple required size="3">
+                    {% for cn in classes %}
+                    <option value="{{ cn }}">{{ cn }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2 d-grid">
+                <button class="btn btn-primary" type="submit">创建</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width: 80px;">ID</th>
+                        <th style="width: 240px;">任务名称</th>
+                        <th style="width: 200px;">课程</th>
+                        <th style="width: 200px;">班级</th>
+                        <th style="width: 100px;">状态</th>
+                        <th style="width: 170px;">开始</th>
+                        <th style="width: 170px;">结束</th>
+                        <th style="width: 260px;">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for t in tasks %}
+                    <tr>
+                        <td class="align-middle">{{ t.task_id }}</td>
+                        <td class="align-middle">{{ t.title }}</td>
+                        <td class="align-middle">{{ t.course_name }}</td>
+                        <td class="align-middle text-nowrap">{{ t.class_name or '-' }}</td>
+                        <td class="align-middle">
+                            {% if t.status == 'running' %}
+                            <span class="badge bg-success">进行中</span>
+                            {% elif t.status == 'closed' %}
+                            <span class="badge bg-secondary">已结束</span>
+                            {% else %}
+                            <span class="badge bg-warning text-dark">草稿</span>
+                            {% endif %}
+                        </td>
+                        <td class="align-middle">{{ t.start_time or '-' }}</td>
+                        <td class="align-middle">{{ t.end_time or '-' }}</td>
+                        <td class="align-middle d-flex flex-wrap gap-2">
+                            {% if t.status != 'running' and t.status != 'closed' %}
+                            <form method="post" action="/api/attendance_tasks/{{ t.task_id }}/start">
+                                <button class="btn btn-sm btn-outline-success" type="submit">开始</button>
+                            </form>
+                            {% endif %}
+                            {% if t.status == 'running' %}
+                            <form method="post" action="/api/attendance_tasks/{{ t.task_id }}/close">
+                                <button class="btn btn-sm btn-outline-secondary" type="submit">结束</button>
+                            </form>
+                            <a class="btn btn-sm btn-primary" href="/?task_id={{ t.task_id }}">进入考勤</a>
+                            {% endif %}
+                            {% if t.status != 'running' %}
+                            <a class="btn btn-sm btn-outline-primary" href="/?task_id={{ t.task_id }}">查看实时页</a>
+                            <form method="post" action="/api/attendance_tasks/{{ t.task_id }}/delete" onsubmit="return confirm('确定删除该考勤任务吗？');">
+                                <button class="btn btn-sm btn-outline-danger" type="submit">删除</button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

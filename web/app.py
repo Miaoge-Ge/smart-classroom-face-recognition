@@ -30,23 +30,82 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from core.security import verify_password, get_password_hash
 
-# Add root to path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add root to path FIRST before importing local modules
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.face_service import FaceRecognitionService
 from core.database import engine, Base, get_db, SessionLocal
-from core.models import Student, Attendance, AdminUser, Course, UserAccount, AuditLog
+from core.models import (
+    Student,
+    Attendance,
+    AdminUser,
+    Course,
+    UserAccount,
+    AuditLog,
+    CourseStudent,
+    AttendanceTask,
+    AttendanceTaskStudent,
+)
 from core.config_manager import Config, global_config
 from core.runtime_settings import get_runtime_settings, load_raw_config, save_raw_config
 from core.audit import write_audit_log
 from core.crypto_manager import encrypt_bytes, encrypt_to_b64, decrypt_bytes
 from core.data_access import resolve_course_id, get_teacher_course_ids, build_attendance_query, query_attendance_joined
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+
 # Create Tables
 Base.metadata.create_all(bind=engine)
 
+def _repair_sqlite_course_students_table():
+    try:
+        if engine.url.get_backend_name() != "sqlite":
+            return
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT sql FROM sqlite_master WHERE type='table' AND name='course_students'")).fetchone()
+            ddl = row[0] if row and row[0] else ""
+        if not ddl:
+            return
+        if "courses_old" not in ddl and "students_old" not in ddl:
+            return
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            conn.exec_driver_sql("DROP TABLE IF EXISTS course_students_broken")
+            conn.exec_driver_sql("ALTER TABLE course_students RENAME TO course_students_broken")
+            conn.exec_driver_sql(
+                """
+                CREATE TABLE course_students (
+                    id INTEGER NOT NULL,
+                    course_id INTEGER NOT NULL,
+                    student_id INTEGER NOT NULL,
+                    created_at DATETIME,
+                    PRIMARY KEY (id),
+                    FOREIGN KEY(course_id) REFERENCES courses (course_id) ON DELETE CASCADE,
+                    FOREIGN KEY(student_id) REFERENCES students (student_id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.exec_driver_sql(
+                """
+                INSERT INTO course_students (id, course_id, student_id, created_at)
+                SELECT id, course_id, student_id, created_at FROM course_students_broken
+                """
+            )
+            conn.exec_driver_sql("DROP TABLE course_students_broken")
+            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_course_students_course_id ON course_students (course_id)")
+            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_course_students_student_id ON course_students (student_id)")
+            conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+    except Exception:
+        return
+
+_repair_sqlite_course_students_table()
+
 # Config
-SECRET_KEY = "your-secret-key-keep-it-safe"
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-keep-it-safe-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -65,6 +124,7 @@ def _write_attendance_batch_sync(items: list[dict]):
                 Attendance(
                     student_id=int(it["student_id"]),
                     course_id=int(it["course_id"]),
+                    task_id=int(it["task_id"]) if it.get("task_id") is not None else None,
                     check_time=it.get("check_time") or datetime.now(),
                     created_at=it.get("created_at") or datetime.now(),
                     confidence=it.get("confidence"),
@@ -119,9 +179,11 @@ async def _dedup_cleanup_worker(app: FastAPI):
 
 def ensure_schema():
     expected = {
-        "students": {"student_id", "student_no", "name", "class", "college", "gender", "face_image_path", "face_embedding_enc", "created_at"},
-        "courses": {"course_id", "course_no", "course_name", "teacher", "schedule", "location", "created_at"},
-        "attendances": {"record_id", "student_id", "course_id", "check_time", "confidence", "status", "created_at"},
+        "students": {"student_id", "student_no", "name", "class_name", "college", "gender", "face_image_path", "face_embedding_enc", "created_at"},
+        "courses": {"course_id", "course_no", "course_name", "teacher", "schedule", "start_time", "end_time", "location", "class_names", "created_at"},
+        "attendances": {"record_id", "student_id", "course_id", "task_id", "check_time", "confidence", "status", "created_at"},
+        "attendance_tasks": {"task_id", "title", "course_id", "class_name", "status", "start_time", "end_time", "created_by", "created_at"},
+        "attendance_task_students": {"id", "task_id", "student_id", "created_at"},
     }
 
     def table_cols(conn, table: str) -> set[str]:
@@ -151,6 +213,20 @@ def ensure_schema():
                 return False
         return True
 
+    def fk_ok(conn, table: str, bad_refs: set[str]) -> bool:
+        if not has_table(conn, table):
+            return True
+        try:
+            rows = conn.execute(text(f"PRAGMA foreign_key_list({table})")).fetchall()
+        except Exception:
+            return True
+        for r in rows:
+            if len(r) >= 3 and r[2] in bad_refs:
+                return False
+            if len(r) >= 3 and r[2] and not has_table(conn, str(r[2])):
+                return False
+        return True
+
     def create_target_tables(conn):
         conn.execute(text("PRAGMA foreign_keys=OFF"))
         conn.execute(
@@ -159,7 +235,7 @@ def ensure_schema():
                 "  student_id INTEGER PRIMARY KEY AUTOINCREMENT,"
                 "  student_no VARCHAR NOT NULL,"
                 "  name VARCHAR NOT NULL,"
-                "  class VARCHAR,"
+                "  class_name VARCHAR,"
                 "  college VARCHAR,"
                 "  gender VARCHAR,"
                 "  face_image_path VARCHAR,"
@@ -176,8 +252,27 @@ def ensure_schema():
                 "  course_name VARCHAR NOT NULL,"
                 "  teacher VARCHAR,"
                 "  schedule VARCHAR,"
+                "  start_time DATETIME,"
+                "  end_time DATETIME,"
                 "  location VARCHAR,"
+                "  class_names VARCHAR,"
                 "  created_at DATETIME"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS attendance_tasks ("
+                "  task_id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "  title VARCHAR NOT NULL,"
+                "  course_id INTEGER NOT NULL,"
+                "  class_name VARCHAR,"
+                "  status VARCHAR NOT NULL,"
+                "  start_time DATETIME,"
+                "  end_time DATETIME,"
+                "  created_by VARCHAR,"
+                "  created_at DATETIME,"
+                "  FOREIGN KEY(course_id) REFERENCES courses(course_id) ON DELETE CASCADE"
                 ")"
             )
         )
@@ -187,19 +282,39 @@ def ensure_schema():
                 "  record_id INTEGER PRIMARY KEY AUTOINCREMENT,"
                 "  student_id INTEGER NOT NULL,"
                 "  course_id INTEGER NOT NULL,"
+                "  task_id INTEGER,"
                 "  check_time DATETIME,"
                 "  confidence FLOAT,"
                 "  status VARCHAR,"
                 "  created_at DATETIME,"
                 "  FOREIGN KEY(student_id) REFERENCES students(student_id) ON DELETE CASCADE,"
-                "  FOREIGN KEY(course_id) REFERENCES courses(course_id) ON DELETE CASCADE"
+                "  FOREIGN KEY(course_id) REFERENCES courses(course_id) ON DELETE CASCADE,"
+                "  FOREIGN KEY(task_id) REFERENCES attendance_tasks(task_id) ON DELETE SET NULL"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS attendance_task_students ("
+                "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "  task_id INTEGER NOT NULL,"
+                "  student_id INTEGER NOT NULL,"
+                "  created_at DATETIME,"
+                "  FOREIGN KEY(task_id) REFERENCES attendance_tasks(task_id) ON DELETE CASCADE,"
+                "  FOREIGN KEY(student_id) REFERENCES students(student_id) ON DELETE CASCADE"
                 ")"
             )
         )
         conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_students_student_no ON students(student_no)"))
         conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_courses_course_no ON courses(course_no)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_task_course_id ON attendance_tasks(course_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_task_status ON attendance_tasks(status)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_task_class_name ON attendance_tasks(class_name)"))
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_task_student ON attendance_task_students(task_id, student_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_task_students_task ON attendance_task_students(task_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_att_student_id ON attendances(student_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_att_course_id ON attendances(course_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_att_task_id ON attendances(task_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_att_check_time ON attendances(check_time)"))
         conn.execute(text("PRAGMA foreign_keys=ON"))
 
@@ -215,8 +330,11 @@ def ensure_schema():
                 break
 
         fix_user_accounts = not user_accounts_fk_ok(conn)
+        fix_fk = not fk_ok(conn, "attendance_tasks", {"courses_old"}) or not fk_ok(
+            conn, "attendance_task_students", {"attendance_tasks_old", "students_old"}
+        ) or not fk_ok(conn, "attendances", {"attendance_tasks_old", "students_old", "courses_old"})
 
-        if not need_rebuild and not fix_user_accounts:
+        if not need_rebuild and not fix_user_accounts and not fix_fk:
             try:
                 with conn.begin():
                     if has_table(conn, "user_accounts") and has_table(conn, "students"):
@@ -282,6 +400,10 @@ def ensure_schema():
         conn.execute(text("PRAGMA foreign_keys=OFF"))
         conn.execute(text("BEGIN IMMEDIATE"))
         try:
+            if "attendance_task_students" in existing_tables:
+                conn.execute(text("ALTER TABLE attendance_task_students RENAME TO attendance_task_students_old"))
+            if "attendance_tasks" in existing_tables:
+                conn.execute(text("ALTER TABLE attendance_tasks RENAME TO attendance_tasks_old"))
             if "students" in existing_tables:
                 conn.execute(text("ALTER TABLE students RENAME TO students_old"))
             if "courses" in existing_tables:
@@ -297,7 +419,7 @@ def ensure_schema():
                     "CREATE TABLE IF NOT EXISTS user_accounts ("
                     "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
                     "  username VARCHAR NOT NULL,"
-                    "  hashed_password VARCHAR NOT NULL,"
+                    "  hashed_password VARCHAR,"
                     "  role VARCHAR NOT NULL,"
                     "  full_name VARCHAR,"
                     "  student_id INTEGER,"
@@ -332,7 +454,7 @@ def ensure_schema():
 
                 conn.execute(
                     text(
-                        "INSERT INTO students(student_id, student_no, name, class, college, gender, face_image_path, face_embedding_enc, created_at) "
+                        "INSERT INTO students(student_id, student_no, name, class_name, college, gender, face_image_path, face_embedding_enc, created_at) "
                         f"SELECT {expr_student_id}, {expr_student_no}, {expr_name}, {expr_class}, {expr_college}, {expr_gender}, {expr_face_path}, {expr_face_emb}, {expr_created} "
                         "FROM students_old"
                     )
@@ -383,8 +505,8 @@ def ensure_schema():
 
                 conn.execute(
                     text(
-                        "INSERT INTO courses(course_id, course_no, course_name, teacher, schedule, location, created_at) "
-                        f"SELECT {expr_course_id}, {expr_course_no}, {expr_course_name}, {expr_teacher}, {expr_schedule}, {expr_location}, {expr_created} "
+                        "INSERT INTO courses(course_id, course_no, course_name, teacher, schedule, start_time, end_time, location, class_names, created_at) "
+                        f"SELECT {expr_course_id}, {expr_course_no}, {expr_course_name}, {expr_teacher}, {expr_schedule}, NULL, NULL, {expr_location}, NULL, {expr_created} "
                         "FROM courses_old"
                     )
                 )
@@ -436,8 +558,8 @@ def ensure_schema():
 
                 conn.execute(
                     text(
-                        "INSERT INTO attendances(record_id, student_id, course_id, check_time, confidence, status, created_at) "
-                        f"SELECT {expr_record_id}, {expr_student_id}, {expr_course_id}, {expr_check_time}, {expr_conf}, {expr_status}, {expr_created} "
+                        "INSERT INTO attendances(record_id, student_id, course_id, task_id, check_time, confidence, status, created_at) "
+                        f"SELECT {expr_record_id}, {expr_student_id}, {expr_course_id}, NULL, {expr_check_time}, {expr_conf}, {expr_status}, {expr_created} "
                         "FROM attendances_old "
                         f"WHERE ({expr_student_id}) IS NOT NULL AND ({expr_course_id}) IS NOT NULL "
                         f"AND EXISTS(SELECT 1 FROM students WHERE students.student_id = ({expr_student_id})) "
@@ -449,7 +571,7 @@ def ensure_schema():
                 old_cols = table_cols(conn, "user_accounts_old")
                 expr_id = "id" if "id" in old_cols else "NULL"
                 expr_username = "username" if "username" in old_cols else "''"
-                expr_hp = "hashed_password" if "hashed_password" in old_cols else "''"
+                expr_hp = "hashed_password" if "hashed_password" in old_cols else "NULL"
                 expr_role = "role" if "role" in old_cols else "'student'"
                 expr_full = "full_name" if "full_name" in old_cols else "NULL"
                 if "student_id" in old_cols:
@@ -477,6 +599,8 @@ def ensure_schema():
             conn.execute(text("DROP TABLE IF EXISTS students_old"))
             conn.execute(text("DROP TABLE IF EXISTS courses_old"))
             conn.execute(text("DROP TABLE IF EXISTS user_accounts_old"))
+            conn.execute(text("DROP TABLE IF EXISTS attendance_task_students_old"))
+            conn.execute(text("DROP TABLE IF EXISTS attendance_tasks_old"))
             conn.execute(text("COMMIT"))
         except Exception:
             conn.execute(text("ROLLBACK"))
@@ -519,6 +643,12 @@ async def lifespan(app: FastAPI):
         db.add(admin_account)
         db.commit()
         print("Default admin created (admin/admin123)")
+    else:
+        if not admin_account.hashed_password:
+            admin_account.hashed_password = get_password_hash("admin123")
+            db.add(admin_account)
+            db.commit()
+            print("Default admin password reset (admin/admin123)")
 
     legacy_admin = db.query(AdminUser).filter(AdminUser.username == "admin").first()
     if not legacy_admin:
@@ -625,6 +755,29 @@ def require_roles(*roles: str):
 
     return dep
 
+def parse_date_param(value: str | None, *, end: bool) -> datetime | None:
+    if not value:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    s = s.replace("年", "-").replace("月", "-").replace("日", "")
+    s = s.replace("/", "-")
+    has_time = ":" in s
+    dt = None
+    try:
+        dt = datetime.fromisoformat(s)
+    except Exception:
+        try:
+            dt = datetime.strptime(s, "%Y-%m-%d")
+        except Exception:
+            return None
+    if not has_time:
+        if end:
+            return dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+        return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    return dt
+
 # --- Pages ---
 
 @app.get("/login")
@@ -638,7 +791,7 @@ async def login_submit(request: Request, db: Session = Depends(get_db), username
         access_token = create_access_token(
             username=account.username, role=account.role, full_name=account.full_name, student_id=account.student_id
         )
-        redirect_url = "/dashboard" if account.role in {"admin", "teacher"} else "/my_attendance"
+        redirect_url = "/" if account.role in {"admin", "teacher"} else "/my_attendance"
         response = RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
         response.set_cookie(
             key="access_token",
@@ -661,7 +814,7 @@ async def login_submit(request: Request, db: Session = Depends(get_db), username
     legacy_admin = db.query(AdminUser).filter(AdminUser.username == username).first()
     if legacy_admin and verify_password(password, legacy_admin.hashed_password):
         access_token = create_access_token(username=legacy_admin.username, role="admin", full_name=legacy_admin.full_name)
-        response = RedirectResponse(url="/dashboard", status_code=status.HTTP_302_FOUND)
+        response = RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
         response.set_cookie(
             key="access_token",
             value=access_token,
@@ -705,67 +858,6 @@ async def logout(request: Request, user=Depends(login_required)):
         user_agent=request.headers.get("user-agent"),
     )
     return response
-
-@app.get("/dashboard")
-async def dashboard_page(request: Request, user=Depends(login_required), db: Session = Depends(get_db)):
-    if user.get("role") == "student":
-        return RedirectResponse(url="/my_attendance", status_code=status.HTTP_302_FOUND)
-    # Statistics
-    total_students = db.query(Student).count()
-    total_courses = db.query(Course).count()
-    
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_attendance = db.query(Attendance.student_id).filter(Attendance.check_time >= today_start).distinct().count()
-    
-    # Calculate Real-time Rate (Today)
-    # If total_students is 0, avoid division by zero
-    if total_students > 0:
-        weekly_rate = int((today_attendance / total_students) * 100)
-    else:
-        weekly_rate = 0
-    
-    # Chart Data (Last 7 days including today)
-    dates = []
-    counts = []
-    # Loop from 6 days ago to today (0 days ago)
-    for i in range(6, -1, -1):
-        day = today_start - timedelta(days=i)
-        next_day = day + timedelta(days=1)
-        cnt = (
-            db.query(Attendance.student_id)
-            .filter(Attendance.check_time >= day, Attendance.check_time < next_day)
-            .distinct()
-            .count()
-        )
-        dates.append(day.strftime("%m-%d"))
-        counts.append(cnt)
-        
-    # Pie Chart (Colleges)
-    colleges_stats = db.query(Student.college, func.count(Student.student_id)).group_by(Student.college).all()
-    college_names = [c[0] if c[0] else "Unknown" for c in colleges_stats]
-    college_counts = [c[1] for c in colleges_stats]
-    
-    stats = {
-        "total_students": total_students,
-        "today_attendance": today_attendance,
-        "total_courses": total_courses,
-        "weekly_rate": weekly_rate
-    }
-    
-    chart_data = {
-        "dates": dates,
-        "counts": counts,
-        "college_names": college_names,
-        "college_counts": college_counts
-    }
-    
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request, 
-        "user": user,
-        "stats": stats,
-        "chart_data": chart_data,
-        "title": "仪表盘"
-    })
 
 @app.get("/")
 async def index(request: Request, user=Depends(require_roles("admin", "teacher")), db: Session = Depends(get_db)):
@@ -930,16 +1022,8 @@ async def history_page(
 
     start_time = None
     end_time = None
-    if start_date:
-        try:
-            start_time = datetime.fromisoformat(start_date).replace(hour=0, minute=0, second=0, microsecond=0)
-        except Exception:
-            start_time = None
-    if end_date:
-        try:
-            end_time = datetime.fromisoformat(end_date).replace(hour=23, minute=59, second=59, microsecond=999999)
-        except Exception:
-            end_time = None
+    start_time = parse_date_param(start_date, end=False)
+    end_time = parse_date_param(end_date, end=True)
 
     base_q = build_attendance_query(
         db,
@@ -951,10 +1035,51 @@ async def history_page(
         end_time=end_time,
     )
     total_count = base_q.count()
-    distinct_students = base_q.with_entities(Attendance.student_id).distinct().count()
     avg_confidence = base_q.with_entities(func.avg(Attendance.confidence)).scalar()
-    expected_count = db.query(Student.student_id).count()
-    attendance_rate = int((distinct_students / expected_count) * 100) if expected_count else 0
+
+    roster_ids: set[int] = set()
+    absent_list: list[dict] = []
+    if course_id:
+        course = db.query(Course).filter(Course.course_id == int(course_id)).first()
+        if course and course.class_names:
+            class_names = [x.strip() for x in str(course.class_names).split(",") if x.strip()]
+            if class_names:
+                roster_q = db.query(Student.student_id).filter(Student.student_no != "UNKNOWN", Student.class_name.in_(class_names))
+                if college:
+                    roster_q = roster_q.filter(Student.college == college)
+                roster_ids = {int(r[0]) for r in roster_q.all() if r[0] is not None}
+
+    expected_count = len(roster_ids) if roster_ids else db.query(Student.student_id).filter(Student.student_no != "UNKNOWN").count()
+
+    stats_q = build_attendance_query(
+        db,
+        course_id=course_id,
+        teacher_course_ids=teacher_course_ids,
+        college=college,
+        search_query=None,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    if roster_ids:
+        stats_q = stats_q.filter(Attendance.student_id.in_(list(roster_ids)))
+    actual_ids_rows = stats_q.with_entities(Attendance.student_id).distinct().all()
+    actual_ids = {int(r[0]) for r in actual_ids_rows if r[0] is not None}
+    actual_count = len(actual_ids)
+    attendance_rate = int((actual_count / expected_count) * 100) if expected_count else 0
+
+    absent_count = 0
+    if roster_ids:
+        absent_ids = roster_ids - actual_ids
+        absent_count = len(absent_ids)
+        if absent_ids:
+            rows = (
+                db.query(Student.student_no, Student.name, Student.class_name)
+                .filter(Student.student_id.in_(list(absent_ids)))
+                .order_by(Student.class_name, Student.name)
+                .limit(80)
+                .all()
+            )
+            absent_list = [{"student_no": r[0] or "-", "name": r[1] or "-", "class_name": r[2] or "-"} for r in rows]
 
     records = (
         base_q.offset((page - 1) * page_size).limit(page_size).all()
@@ -984,6 +1109,7 @@ async def history_page(
         .filter(Course.teacher == (user.get("full_name") or user.get("username")), Course.course_no != "UNKNOWN")
         .all()
     )
+    course_map = {c.course_id: c.course_name for c in courses}
 
     return templates.TemplateResponse("history.html", {
         "request": request, 
@@ -999,6 +1125,11 @@ async def history_page(
             "total_count": total_count,
             "attendance_rate": attendance_rate,
             "avg_confidence": float(avg_confidence) if avg_confidence is not None else None,
+            "expected_count": expected_count,
+            "actual_count": actual_count,
+            "absent_count": absent_count,
+            "absent_list": absent_list,
+            "course_name": course_map.get(int(course_id)) if course_id else None,
         },
         "page": page,
         "page_size": page_size,
@@ -1007,12 +1138,223 @@ async def history_page(
         "title": "考勤记录"
     })
 
+
+@app.get("/attendance_tasks")
+async def attendance_tasks_page(request: Request, user=Depends(require_roles("admin", "teacher")), db: Session = Depends(get_db)):
+    teacher_key = user.get("full_name") or user.get("username")
+    if user.get("role") == "teacher":
+        courses = db.query(Course).filter(Course.teacher == teacher_key, Course.course_no != "UNKNOWN").all()
+        course_ids = [c.course_id for c in courses]
+        tasks = (
+            db.query(AttendanceTask)
+            .filter(AttendanceTask.course_id.in_(course_ids))
+            .order_by(AttendanceTask.created_at.desc())
+            .limit(500)
+            .all()
+        )
+    else:
+        courses = db.query(Course).filter(Course.course_no != "UNKNOWN").all()
+        tasks = db.query(AttendanceTask).order_by(AttendanceTask.created_at.desc()).limit(500).all()
+
+    class_rows = db.query(Student.class_name).distinct().all()
+    classes = [r[0] for r in class_rows if r[0]]
+
+    course_map = {c.course_id: c.course_name for c in courses}
+    items = []
+    for t in tasks:
+        items.append(
+            {
+                "task_id": t.task_id,
+                "title": t.title,
+                "course_id": t.course_id,
+                "course_name": course_map.get(t.course_id) or "-",
+                "class_name": t.class_name,
+                "status": t.status,
+                "start_time": t.start_time.strftime("%Y-%m-%d %H:%M:%S") if t.start_time else None,
+                "end_time": t.end_time.strftime("%Y-%m-%d %H:%M:%S") if t.end_time else None,
+            }
+        )
+
+    return templates.TemplateResponse(
+        "attendance_tasks.html",
+        {"request": request, "user": user, "courses": courses, "classes": classes, "tasks": items, "title": "考勤任务"},
+    )
+
+
+@app.get("/api/attendance_tasks")
+async def attendance_tasks_api(
+    status: str = None,
+    user=Depends(require_roles("admin", "teacher")),
+    db: Session = Depends(get_db),
+):
+    teacher_key = user.get("full_name") or user.get("username")
+    q = db.query(AttendanceTask)
+    if user.get("role") == "teacher":
+        course_ids = [r[0] for r in db.query(Course.course_id).filter(Course.teacher == teacher_key).all()]
+        q = q.filter(AttendanceTask.course_id.in_(course_ids)) if course_ids else q.filter(False)
+    if status:
+        q = q.filter(AttendanceTask.status == status)
+    tasks = q.order_by(AttendanceTask.created_at.desc()).limit(500).all()
+    course_rows = db.query(Course.course_id, Course.course_name).all()
+    course_map = {r[0]: r[1] for r in course_rows}
+    data = []
+    for t in tasks:
+        data.append(
+            {
+                "task_id": t.task_id,
+                "title": t.title,
+                "course_id": t.course_id,
+                "course_name": course_map.get(t.course_id),
+                "class_name": t.class_name,
+                "status": t.status,
+                "start_time": t.start_time.isoformat() if t.start_time else None,
+                "end_time": t.end_time.isoformat() if t.end_time else None,
+            }
+        )
+    return {"tasks": data}
+
+
+@app.post("/api/attendance_tasks")
+async def create_attendance_task(
+    request: Request,
+    title: str = Form(...),
+    course_id: int = Form(...),
+    user=Depends(require_roles("admin", "teacher")),
+    db: Session = Depends(get_db),
+):
+    teacher_key = user.get("full_name") or user.get("username")
+    course = db.query(Course).filter(Course.course_id == course_id).first()
+    if not course:
+        return RedirectResponse(url="/attendance_tasks", status_code=303)
+    if user.get("role") == "teacher" and course.teacher != teacher_key:
+        raise HTTPException(status_code=403, detail="无权限创建该课程的任务")
+
+    form = await request.form()
+    class_names = [str(x).strip() for x in (form.getlist("class_names") if form else []) if str(x).strip()]
+    title = (title or "").strip()
+    if not title or not class_names:
+        return RedirectResponse(url="/attendance_tasks", status_code=303)
+
+    students = db.query(Student.student_id).filter(Student.class_name.in_(class_names)).all()
+    student_ids = [int(r[0]) for r in students if r[0] is not None]
+    if not student_ids:
+        return RedirectResponse(url="/attendance_tasks", status_code=303)
+
+    class_label = ",".join(class_names)
+    task = AttendanceTask(
+        title=title,
+        course_id=int(course_id),
+        class_name=class_label,
+        status="draft",
+        created_by=user.get("username"),
+        created_at=datetime.now(),
+    )
+    db.add(task)
+    db.flush()
+    for sid in student_ids:
+        db.add(AttendanceTaskStudent(task_id=task.task_id, student_id=int(sid), created_at=datetime.now()))
+    db.commit()
+    write_audit_log(
+        actor_username=user.get("username"),
+        actor_role=user.get("role"),
+        action="create_attendance_task",
+        resource="/api/attendance_tasks",
+        status="success",
+        ip=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+        details={"task_id": task.task_id, "course_id": course_id, "class_names": class_names},
+    )
+    return RedirectResponse(url="/attendance_tasks", status_code=303)
+
+
+@app.post("/api/attendance_tasks/{task_id}/start")
+async def start_attendance_task(
+    request: Request,
+    task_id: int,
+    user=Depends(require_roles("admin", "teacher")),
+    db: Session = Depends(get_db),
+):
+    teacher_key = user.get("full_name") or user.get("username")
+    task = db.query(AttendanceTask).filter(AttendanceTask.task_id == task_id).first()
+    if not task:
+        return RedirectResponse(url="/attendance_tasks", status_code=303)
+    if user.get("role") == "teacher":
+        course = db.query(Course).filter(Course.course_id == task.course_id).first()
+        if not course or course.teacher != teacher_key:
+            raise HTTPException(status_code=403, detail="无权限")
+    if task.status != "running":
+        task.status = "running"
+        task.start_time = datetime.now()
+        task.end_time = None
+        db.add(task)
+        db.commit()
+    return RedirectResponse(url="/attendance_tasks", status_code=303)
+
+
+@app.post("/api/attendance_tasks/{task_id}/close")
+async def close_attendance_task(
+    request: Request,
+    task_id: int,
+    user=Depends(require_roles("admin", "teacher")),
+    db: Session = Depends(get_db),
+):
+    teacher_key = user.get("full_name") or user.get("username")
+    task = db.query(AttendanceTask).filter(AttendanceTask.task_id == task_id).first()
+    if not task:
+        return RedirectResponse(url="/attendance_tasks", status_code=303)
+    if user.get("role") == "teacher":
+        course = db.query(Course).filter(Course.course_id == task.course_id).first()
+        if not course or course.teacher != teacher_key:
+            raise HTTPException(status_code=403, detail="无权限")
+    if task.status == "running":
+        task.status = "closed"
+        task.end_time = datetime.now()
+        db.add(task)
+        db.commit()
+    return RedirectResponse(url="/attendance_tasks", status_code=303)
+
+
+@app.post("/api/attendance_tasks/{task_id}/delete")
+async def delete_attendance_task(
+    request: Request,
+    task_id: int,
+    user=Depends(require_roles("admin", "teacher")),
+    db: Session = Depends(get_db),
+):
+    teacher_key = user.get("full_name") or user.get("username")
+    task = db.query(AttendanceTask).filter(AttendanceTask.task_id == task_id).first()
+    if not task:
+        return RedirectResponse(url="/attendance_tasks", status_code=303)
+    if user.get("role") == "teacher":
+        course = db.query(Course).filter(Course.course_id == task.course_id).first()
+        if not course or course.teacher != teacher_key:
+            raise HTTPException(status_code=403, detail="无权限")
+    if task.status == "running":
+        return RedirectResponse(url="/attendance_tasks", status_code=303)
+    deleted = {"task_id": task.task_id, "course_id": task.course_id, "class_name": task.class_name, "status": task.status}
+    db.delete(task)
+    db.commit()
+    write_audit_log(
+        actor_username=user.get("username"),
+        actor_role=user.get("role"),
+        action="delete_attendance_task",
+        resource="/api/attendance_tasks/{task_id}/delete",
+        status="success",
+        ip=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+        details=deleted,
+    )
+    return RedirectResponse(url="/attendance_tasks", status_code=303)
+
 @app.get("/courses")
 async def courses_page(request: Request, user=Depends(require_roles("admin")), db: Session = Depends(get_db)):
     courses = db.query(Course).filter(Course.course_no != "UNKNOWN").all()
+    class_rows = db.query(Student.class_name).distinct().all()
+    classes = [r[0] for r in class_rows if r[0]]
     return templates.TemplateResponse("courses.html", {
         "request": request, 
         "courses": courses,
+        "classes": classes,
         "user": user,
         "title": "课程管理"
     })
@@ -1023,18 +1365,47 @@ async def add_course(
     name: str = Form(...),
     code: str = Form(...),
     teacher: str = Form(...),
-    schedule: str = Form(...),
+    start_time: str = Form(None),
+    end_time: str = Form(None),
+    schedule: str = Form(None),
     location: str = Form(None),
     db: Session = Depends(get_db),
     user=Depends(require_roles("admin"))
 ):
     try:
+        form = await request.form()
+        class_names = [str(x).strip() for x in (form.getlist("class_names") if form else []) if str(x).strip()]
+        class_label = ",".join(class_names) if class_names else None
+
+        start_dt = None
+        end_dt = None
+        if start_time:
+            try:
+                start_dt = datetime.fromisoformat(str(start_time))
+            except Exception:
+                start_dt = None
+        if end_time:
+            try:
+                end_dt = datetime.fromisoformat(str(end_time))
+            except Exception:
+                end_dt = None
+
+        schedule_text = (schedule or "").strip() if schedule else None
+        if start_dt:
+            if end_dt:
+                schedule_text = f"{start_dt.strftime('%Y-%m-%d %H:%M')} - {end_dt.strftime('%Y-%m-%d %H:%M')}"
+            else:
+                schedule_text = start_dt.strftime("%Y-%m-%d %H:%M")
+
         course = Course(
             course_name=name,
             course_no=code,
-            schedule=schedule,
+            schedule=schedule_text,
+            start_time=start_dt,
+            end_time=end_dt,
             location=location,
             teacher=teacher,
+            class_names=class_label,
         )
         db.add(course)
         db.commit()
@@ -1046,7 +1417,7 @@ async def add_course(
             status="success",
             ip=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
-            details={"name": name, "code": code, "teacher": teacher, "schedule": schedule, "location": location},
+            details={"name": name, "code": code, "teacher": teacher, "schedule": schedule_text, "location": location, "class_names": class_names, "start_time": start_time, "end_time": end_time},
         )
         return RedirectResponse(url="/courses", status_code=303)
     except Exception as e:
@@ -1055,10 +1426,27 @@ async def add_course(
 @app.post("/api/delete_course")
 async def delete_course(request: Request, course_id: int = Form(...), db: Session = Depends(get_db), user=Depends(require_roles("admin"))):
     course = db.query(Course).filter(Course.course_id == course_id).first()
-    if course:
-        deleted = {"id": course.course_id, "name": course.course_name, "code": course.course_no}
-        db.delete(course)
-        db.commit()
+    if not course:
+        return RedirectResponse(url="/courses", status_code=303)
+    deleted = {"id": course.course_id, "name": course.course_name, "code": course.course_no}
+    try:
+        for i in range(3):
+            try:
+                db.query(Attendance).filter(Attendance.course_id == int(course_id)).delete(synchronize_session=False)
+                db.query(CourseStudent).filter(CourseStudent.course_id == int(course_id)).delete(synchronize_session=False)
+                db.query(AttendanceTask).filter(AttendanceTask.course_id == int(course_id)).delete(synchronize_session=False)
+                db.delete(course)
+                db.commit()
+                break
+            except OperationalError as oe:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                if i < 2 and "locked" in str(oe).lower():
+                    time.sleep(0.15 * (i + 1))
+                    continue
+                raise
         write_audit_log(
             actor_username=user.get("username"),
             actor_role=user.get("role"),
@@ -1069,83 +1457,29 @@ async def delete_course(request: Request, course_id: int = Form(...), db: Sessio
             user_agent=request.headers.get("user-agent"),
             details=deleted,
         )
-    return RedirectResponse(url="/courses", status_code=303)
-
-@app.get("/analysis")
-async def analysis_page(request: Request, course_id: int = None, course_name: str = None, user=Depends(require_roles("admin", "teacher")), db: Session = Depends(get_db)):
-    # 1. Total Records
-    attendance_query = db.query(Attendance)
-    if user.get("role") == "teacher":
-        teacher_key = user.get("full_name") or user.get("username")
-        teacher_courses = db.query(Course.course_id).filter(Course.teacher == teacher_key).all()
-        teacher_course_ids = [c[0] for c in teacher_courses]
-        attendance_query = attendance_query.filter(Attendance.course_id.in_(teacher_course_ids)) if teacher_course_ids else attendance_query.filter(False)
-
-    if not course_id and course_name:
-        c = (
-            db.query(Course.course_id)
-            .filter(Course.course_name == course_name)
-            .first()
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        write_audit_log(
+            actor_username=user.get("username"),
+            actor_role=user.get("role"),
+            action="delete_course",
+            resource="/api/delete_course",
+            status="error",
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            details={"course": deleted, "error": str(e)},
         )
-        course_id = c[0] if c else None
-    if course_id:
-        attendance_query = attendance_query.filter(Attendance.course_id == course_id)
-
-    total_records = attendance_query.count()
-    
-    # 2. Avg Rate (Mock or Simple Calc)
-    # Let's use: (Total Attendance / (Total Students * 30 days)) * 100 ?
-    # Or just simpler: Total Unique Students Attended Today / Total Students
-    total_students = db.query(Student).count() or 1
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_att = (
-        attendance_query.with_entities(Attendance.student_id)
-        .filter(Attendance.check_time >= today_start)
-        .distinct()
-        .count()
-    )
-    avg_rate = int((today_att / total_students) * 100)
-    
-    # 3. College Stats
-    colleges_stats = (
-        db.query(Student.college, func.count(Attendance.record_id))
-        .join(Attendance, Attendance.student_id == Student.student_id)
-        .filter(Attendance.record_id.in_(attendance_query.with_entities(Attendance.record_id)))
-        .group_by(Student.college)
-        .all()
-    )
-    col_names = [c[0] if c[0] else "Unknown" for c in colleges_stats]
-    col_counts = [c[1] for c in colleges_stats]
-    
-    # 4. Low Attendance Warning
-    # Find students with less than X attendances in last 30 days
-    # Simplified: Get all students and their attendance count
-    results = (
-        db.query(Student, func.count(Attendance.record_id))
-        .outerjoin(Attendance, Attendance.student_id == Student.student_id)
-        .filter((Attendance.record_id == None) | (Attendance.record_id.in_(attendance_query.with_entities(Attendance.record_id))))
-        .group_by(Student.student_id)
-        .all()
-    )
-    low_att_list = []
-    for s, count in results:
-        if count < 5: # Threshold
-            low_att_list.append({"name": s.name, "student_id": s.student_no or "-", "count": count})
-            
-    return templates.TemplateResponse("analysis.html", {
-        "request": request,
-        "user": user,
-        "stats": {"avg_rate": avg_rate, "total_records": total_records},
-        "chart_data": {"colleges": col_names, "counts": col_counts},
-        "low_attendance": low_att_list,
-        "title": "统计分析"
-    })
+    return RedirectResponse(url="/courses", status_code=303)
 
 @app.get("/api/export_attendance")
 async def export_attendance(
     request: Request,
     college: str = None,
     search_query: str = None,
+    task_id: int = None,
     course_id: int = None,
     course_name: str = None,
     start_date: str = None,
@@ -1155,27 +1489,22 @@ async def export_attendance(
 ):
     if not course_id and course_name:
         course_id = resolve_course_id(db, course_name)
+    try:
+        task_id = int(task_id) if task_id not in (None, "") else None
+    except Exception:
+        task_id = None
 
     teacher_course_ids = None
     if user.get("role") == "teacher":
         teacher_key = user.get("full_name") or user.get("username")
         teacher_course_ids = get_teacher_course_ids(db, teacher_key)
 
-    start_time = None
-    end_time = None
-    if start_date:
-        try:
-            start_time = datetime.fromisoformat(start_date).replace(hour=0, minute=0, second=0, microsecond=0)
-        except Exception:
-            start_time = None
-    if end_date:
-        try:
-            end_time = datetime.fromisoformat(end_date).replace(hour=23, minute=59, second=59, microsecond=999999)
-        except Exception:
-            end_time = None
+    start_time = parse_date_param(start_date, end=False)
+    end_time = parse_date_param(end_date, end=True)
 
     records = query_attendance_joined(
         db,
+        task_id=task_id,
         course_id=course_id,
         teacher_course_ids=teacher_course_ids,
         college=college,
@@ -1666,6 +1995,8 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.close(code=1008)
             return
 
+        from starlette.websockets import WebSocketDisconnect
+
         async def get_inference_semaphore():
             cur = get_runtime_settings()
             limit = int(cur.get("performance", {}).get("max_inference_concurrency", 2))
@@ -1739,6 +2070,8 @@ async def websocket_endpoint(websocket: WebSocket):
         name_to_student_id: dict[str, int] = {}
         roster: dict[int, dict] = {}
         roster_ids: set[int] = set()
+        current_course_id: int | None = None
+        current_task_id: int | None = None
         last_stats_refresh = 0.0
         cached_stats = {"expected": 0, "actual": 0, "absent_count": 0, "absent_list": []}
 
@@ -1750,18 +2083,65 @@ async def websocket_endpoint(websocket: WebSocket):
             finally:
                 db.close()
 
-        def load_roster_sync():
+        def load_course_students_sync(cid: int):
             db = SessionLocal()
             try:
-                rows = db.query(Student.student_id, Student.student_no, Student.name).all()
+                rows = (
+                    db.query(Student.student_id, Student.student_no, Student.name)
+                    .join(CourseStudent, CourseStudent.student_id == Student.student_id)
+                    .filter(CourseStudent.course_id == cid)
+                    .order_by(Student.name)
+                    .all()
+                )
                 return rows
             finally:
                 db.close()
 
-        for sid, sno, sname in await asyncio.to_thread(load_roster_sync):
-            roster[int(sid)] = {"student_no": sno, "name": sname}
-            roster_ids.add(int(sid))
-        cached_stats["expected"] = len(roster_ids)
+        def load_course_roster_sync(cid: int):
+            db = SessionLocal()
+            try:
+                course = db.query(Course).filter(Course.course_id == cid).first()
+                if course and course.class_names:
+                    class_names = [x.strip() for x in str(course.class_names).split(",") if x.strip()]
+                    if class_names:
+                        rows = (
+                            db.query(Student.student_id, Student.student_no, Student.name)
+                            .filter(Student.class_name.in_(class_names), Student.student_no != "UNKNOWN")
+                            .order_by(Student.name)
+                            .all()
+                        )
+                        if rows:
+                            return rows
+                return (
+                    db.query(Student.student_id, Student.student_no, Student.name)
+                    .join(CourseStudent, CourseStudent.student_id == Student.student_id)
+                    .filter(CourseStudent.course_id == cid)
+                    .order_by(Student.name)
+                    .all()
+                )
+            finally:
+                db.close()
+
+        def load_task_roster_sync(tid: int):
+            db = SessionLocal()
+            try:
+                rows = (
+                    db.query(Student.student_id, Student.student_no, Student.name)
+                    .join(AttendanceTaskStudent, AttendanceTaskStudent.student_id == Student.student_id)
+                    .filter(AttendanceTaskStudent.task_id == tid)
+                    .order_by(Student.name)
+                    .all()
+                )
+                return rows
+            finally:
+                db.close()
+
+        def resolve_task_sync(tid: int) -> AttendanceTask | None:
+            db = SessionLocal()
+            try:
+                return db.query(AttendanceTask).filter(AttendanceTask.task_id == tid).first()
+            finally:
+                db.close()
 
         while True:
             raw = await websocket.receive_text()
@@ -1774,7 +2154,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             data = payload.get("image") if isinstance(payload, dict) else raw
             course_id = payload.get("course_id") if isinstance(payload, dict) else None
-            course_name = payload.get("course_name") if isinstance(payload, dict) else None
+            task_id = payload.get("task_id") if isinstance(payload, dict) else None
             client_ts = payload.get("client_ts") if isinstance(payload, dict) else None
 
             try:
@@ -1782,15 +2162,64 @@ async def websocket_endpoint(websocket: WebSocket):
             except Exception:
                 course_id = None
             try:
+                task_id = int(task_id) if task_id not in (None, "") else None
+            except Exception:
+                task_id = None
+            try:
                 client_ts = int(client_ts) if client_ts not in (None, "") else None
             except Exception:
                 client_ts = None
 
-            if not course_id and course_name:
-                course_id = await asyncio.to_thread(resolve_course_id_sync, course_name)
+            if task_id and task_id != current_task_id:
+                t = await asyncio.to_thread(resolve_task_sync, int(task_id))
+                allowed = True
+                if not t:
+                    allowed = False
+                elif teacher_course_ids is not None and int(t.course_id) not in teacher_course_ids:
+                    allowed = False
+                if allowed:
+                    current_task_id = int(task_id)
+                    current_course_id = int(t.course_id)
+                    roster = {}
+                    roster_ids = set()
+                    for sid, sno, sname in await asyncio.to_thread(load_task_roster_sync, int(task_id)):
+                        roster[int(sid)] = {"student_no": sno, "name": sname}
+                        roster_ids.add(int(sid))
+                    cached_stats["expected"] = len(roster_ids)
+                    last_stats_refresh = 0.0
+                else:
+                    current_task_id = None
+                    current_course_id = None
+                    roster = {}
+                    roster_ids = set()
+                    cached_stats = {"expected": 0, "actual": 0, "absent_count": 0, "absent_list": []}
 
-            if teacher_course_ids is not None and (not course_id or course_id not in teacher_course_ids):
-                course_id = None
+            if course_id and course_id != current_course_id and not task_id:
+                cid = int(course_id)
+                allowed = teacher_course_ids is None or int(cid) in teacher_course_ids
+                if allowed:
+                    current_course_id = cid
+                    current_task_id = None
+                    roster = {}
+                    roster_ids = set()
+                    for sid, sno, sname in await asyncio.to_thread(load_course_roster_sync, cid):
+                        roster[int(sid)] = {"student_no": sno, "name": sname}
+                        roster_ids.add(int(sid))
+                    cached_stats["expected"] = len(roster_ids)
+                    last_stats_refresh = 0.0
+                else:
+                    current_task_id = None
+                    current_course_id = None
+                    roster = {}
+                    roster_ids = set()
+                    cached_stats = {"expected": 0, "actual": 0, "absent_count": 0, "absent_list": []}
+
+            if teacher_course_ids is not None and current_course_id is not None and int(current_course_id) not in teacher_course_ids:
+                current_course_id = None
+                current_task_id = None
+                roster = {}
+                roster_ids = set()
+                cached_stats = {"expected": 0, "actual": 0, "absent_count": 0, "absent_list": []}
 
             if not data:
                 continue
@@ -1829,33 +2258,34 @@ async def websocket_endpoint(websocket: WebSocket):
             for res in results:
                 name = res.get("name")
                 if name and name != "Unknown":
-                    if principal.get("role") == "teacher" and not course_id:
-                        pass
-                    else:
-                        sid = name_to_student_id.get(name)
-                        if sid is None:
-                            sid = await asyncio.to_thread(resolve_student_id_sync, name)
-                            if sid:
-                                name_to_student_id[name] = sid
-                        if sid and course_id:
-                            key = (int(course_id), int(sid))
-                            async with app.state.dedup_lock:
-                                last = app.state.dedup_cache.get(key)
-                                if not last or (now - last).total_seconds() > dedup_seconds:
-                                    try:
-                                        app.state.attendance_queue.put_nowait(
-                                            {
-                                                "student_id": int(sid),
-                                                "course_id": int(course_id),
-                                                "confidence": res.get("score"),
-                                                "check_time": now,
-                                                "created_at": now,
-                                                "status": "已签到",
-                                            }
-                                        )
-                                        app.state.dedup_cache[key] = now
-                                    except Exception:
-                                        pass
+                    sid = name_to_student_id.get(name)
+                    if sid is None:
+                        sid = await asyncio.to_thread(resolve_student_id_sync, name)
+                        if sid:
+                            name_to_student_id[name] = sid
+                    if sid and current_course_id:
+                        enforce_roster = bool(roster_ids)
+                        if enforce_roster and int(sid) not in roster_ids:
+                            continue
+                        key = (int(current_course_id), int(current_task_id or 0), int(sid))
+                        async with app.state.dedup_lock:
+                            last = app.state.dedup_cache.get(key)
+                            if not last or (now - last).total_seconds() > dedup_seconds:
+                                try:
+                                    app.state.attendance_queue.put_nowait(
+                                        {
+                                            "student_id": int(sid),
+                                            "course_id": int(current_course_id),
+                                            "task_id": int(current_task_id) if current_task_id else None,
+                                            "confidence": res.get("score"),
+                                            "check_time": now,
+                                            "created_at": now,
+                                            "status": "已签到",
+                                        }
+                                    )
+                                    app.state.dedup_cache[key] = now
+                                except Exception:
+                                    pass
 
                 current_faces.append(
                     {
@@ -1866,28 +2296,31 @@ async def websocket_endpoint(websocket: WebSocket):
                 )
 
             course_att = 0
-            if course_id:
+            if current_course_id:
                 async with app.state.dedup_lock:
-                    course_att = sum(1 for (cid, _), _t in app.state.dedup_cache.items() if cid == int(course_id))
+                    course_att = sum(1 for (cid, tid, _), _t in app.state.dedup_cache.items() if cid == int(current_course_id) and int(tid) == int(current_task_id or 0))
 
                 if time.monotonic() - last_stats_refresh >= 2.0:
-                    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                    start_at = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
-                    def load_today_att_ids_sync(cid: int, start: datetime):
+                    def load_att_ids_sync(cid: int, tid: int | None, start: datetime):
                         db = SessionLocal()
                         try:
-                            rows = (
-                                db.query(Attendance.student_id)
-                                .filter(Attendance.course_id == cid, Attendance.check_time >= start)
-                                .distinct()
-                                .all()
+                            q = db.query(Attendance.student_id).filter(
+                                Attendance.course_id == cid, 
+                                Attendance.check_time >= start
                             )
+                            if tid:
+                                q = q.filter(Attendance.task_id == tid)
+                            rows = q.distinct().all()
                             return [r[0] for r in rows]
                         finally:
                             db.close()
 
-                    ids = await asyncio.to_thread(load_today_att_ids_sync, int(course_id), today_start)
+                    ids = await asyncio.to_thread(load_att_ids_sync, current_course_id, current_task_id, start_at)
                     actual_ids = {int(x) for x in ids if x is not None}
+                    if roster_ids:
+                        actual_ids = actual_ids & roster_ids
                     absent_ids = roster_ids - actual_ids
                     absent_list = []
                     for sid in list(absent_ids)[:50]:
@@ -1902,19 +2335,24 @@ async def websocket_endpoint(websocket: WebSocket):
                     }
                     last_stats_refresh = time.monotonic()
 
-            await websocket.send_json(
-                {
-                    "faces": current_faces,
-                    "attendance_count": course_att,
-                    "expected_count": cached_stats["expected"],
-                    "actual_count": cached_stats["actual"],
-                    "absent_count": cached_stats["absent_count"],
-                    "absent_list": cached_stats["absent_list"],
-                    "client_ts": client_ts,
-                    "server_ts": int(time.time() * 1000),
-                    "processing_ms": float(processing_ms),
-                }
-            )
+            try:
+                await websocket.send_json(
+                    {
+                        "faces": current_faces,
+                        "attendance_count": course_att,
+                        "expected_count": cached_stats["expected"],
+                        "actual_count": cached_stats["actual"],
+                        "absent_count": cached_stats["absent_count"],
+                        "absent_list": cached_stats["absent_list"],
+                        "client_ts": client_ts,
+                        "server_ts": int(time.time() * 1000),
+                        "processing_ms": float(processing_ms),
+                    }
+                )
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                break
     finally:
         async with app.state.ws_lock:
             app.state.active_ws = max(0, app.state.active_ws - 1)
@@ -1927,7 +2365,7 @@ async def websocket_endpoint(websocket: WebSocket):
 async def register_face(
     request: Request,
     name: str = Form(...), 
-    student_no: str = Form(None),
+    student_no: str = Form(...),
     college: str = Form(None),
     gender: str = Form(None),
     class_name: str = Form(None),
@@ -1942,6 +2380,12 @@ async def register_face(
     os.makedirs(faces_dir, exist_ok=True)
     
     try:
+        name = (name or "").strip()
+        student_no = (student_no or "").strip()
+        if not name:
+            return RedirectResponse(url="/students?error=姓名不能为空", status_code=303)
+        if not student_no:
+            return RedirectResponse(url="/students?error=学号不能为空", status_code=303)
         raw_bytes = await file.read()
         nparr = np.frombuffer(raw_bytes, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -1951,45 +2395,38 @@ async def register_face(
         feats = service.process_image(image)
         if not feats:
             return {"status": "error", "message": "未检测到人脸"}
-            
-        key = (student_no or name or "face").strip()
-        safe = "".join(ch for ch in key if ch.isalnum() or ch in {"-", "_"})
-        if not safe:
-            safe = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
-        file_path = os.path.join(faces_dir, f"{safe}.enc")
-        with open(file_path, "wb") as f:
-            f.write(encrypt_bytes(raw_bytes))
 
-        service.known_faces[name] = feats[0]
-        
         embedding_raw = feats[0].detach().cpu().numpy().astype(np.float32).tobytes()
         embedding_enc = encrypt_to_b64(embedding_raw)
 
         db = SessionLocal()
         try:
-            student = None
-            if student_no:
-                student = db.query(Student).filter(Student.student_no == student_no).first()
-            if not student:
-                student = db.query(Student).filter(Student.name == name).first()
+            student = db.query(Student).filter(Student.student_no == student_no).first()
             if not student:
                 student = Student(
                     name=name, 
-                    face_image_path=file_path, 
-                    student_no=student_no or name,
+                    student_no=student_no,
                     college=college,
                     gender=gender,
                     class_name=class_name
                 )
                 db.add(student)
+                db.flush()
             else:
-                student.face_image_path = file_path
-                if student_no:
-                    student.student_no = student_no
-                if college: student.college = college
-                if gender: student.gender = gender
-                if class_name: student.class_name = class_name
+                student.name = name
+            if college:
+                student.college = college
+            if gender:
+                student.gender = gender
+            if class_name:
+                student.class_name = class_name
+
+            file_path = os.path.join(faces_dir, f"{student.student_id}.enc")
+            with open(file_path, "wb") as f:
+                f.write(encrypt_bytes(raw_bytes))
+            student.face_image_path = file_path
             student.face_embedding_enc = embedding_enc
+            service.known_faces[student.name] = feats[0]
             
             db.commit()
             write_audit_log(
@@ -2061,7 +2498,9 @@ async def student_face(student_id: int, db: Session = Depends(get_db), user=Depe
         media_type = "image/jpeg"
     elif raw.startswith(b"\x89PNG\r\n\x1a\n"):
         media_type = "image/png"
-    return Response(content=raw, media_type=media_type)
+    resp = Response(content=raw, media_type=media_type)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.post("/api/update_student")
@@ -2086,8 +2525,21 @@ async def update_student(
             return {"status": "error", "message": "学生不存在"}
 
         old_name = stu.name
-        stu.student_no = (student_no or "").strip()
-        stu.name = (name or "").strip()
+        new_student_no = (student_no or "").strip()
+        new_name = (name or "").strip()
+        if not new_student_no:
+            return {"status": "error", "message": "学号不能为空"}
+        if not new_name:
+            return {"status": "error", "message": "姓名不能为空"}
+        exists = (
+            db.query(Student.student_id)
+            .filter(Student.student_no == new_student_no, Student.student_id != student_id)
+            .first()
+        )
+        if exists:
+            return {"status": "error", "message": "学号已存在"}
+        stu.student_no = new_student_no
+        stu.name = new_name
         stu.gender = (gender or "").strip() or None
         stu.class_name = (class_name or "").strip() or None
         stu.college = (college or "").strip() or None
@@ -2104,11 +2556,7 @@ async def update_student(
 
             faces_dir = "data/faces"
             os.makedirs(faces_dir, exist_ok=True)
-            key = (stu.student_no or stu.name or "face").strip()
-            safe = "".join(ch for ch in key if ch.isalnum() or ch in {"-", "_"})
-            if not safe:
-                safe = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
-            file_path = os.path.join(faces_dir, f"{safe}.enc")
+            file_path = os.path.join(faces_dir, f"{stu.student_id}.enc")
             with open(file_path, "wb") as f:
                 f.write(encrypt_bytes(raw_bytes))
 

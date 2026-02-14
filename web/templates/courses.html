@@ -20,6 +20,7 @@
                         <th>课程代码</th>
                         <th>课程名称</th>
                         <th>授课教师</th>
+                        <th>上课班级</th>
                         <th>上课时间</th>
                         <th>上课地点</th>
                         <th>创建时间</th>
@@ -32,7 +33,14 @@
                         <td>{{ course.course_no }}</td>
                         <td>{{ course.course_name }}</td>
                         <td>{{ course.teacher }}</td>
-                        <td>{{ course.schedule or '-' }}</td>
+                        <td>{{ course.class_names or '-' }}</td>
+                        <td>
+                            {% if course.start_time %}
+                            {{ course.start_time.strftime('%Y-%m-%d %H:%M') }}{% if course.end_time %} - {{ course.end_time.strftime('%Y-%m-%d %H:%M') }}{% endif %}
+                            {% else %}
+                            {{ course.schedule or '-' }}
+                            {% endif %}
+                        </td>
                         <td>{{ course.location or '-' }}</td>
                         <td>{{ course.created_at.strftime('%Y-%m-%d') }}</td>
                         <td>
@@ -74,8 +82,20 @@
                 <input type="text" class="form-control" name="teacher" required>
             </div>
             <div class="mb-3">
-                <label class="form-label">上课时间</label>
-                <input type="datetime-local" class="form-control" name="schedule" required>
+                <label class="form-label">上课开始时间</label>
+                <input type="datetime-local" class="form-control" name="start_time" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">上课结束时间</label>
+                <input type="datetime-local" class="form-control" name="end_time">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">上课班级</label>
+                <select class="form-select" name="class_names" multiple required size="5">
+                    {% for cn in classes %}
+                    <option value="{{ cn }}">{{ cn }}</option>
+                    {% endfor %}
+                </select>
             </div>
             <div class="mb-3">
                 <label class="form-label">上课地点</label>

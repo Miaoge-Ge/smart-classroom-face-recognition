@@ -25,6 +25,7 @@ def get_teacher_course_ids(db: Session, teacher_key: str | None) -> list[int]:
 def build_attendance_query(
     db: Session,
     *,
+    task_id: int | None = None,
     course_id: int | None = None,
     teacher_course_ids: list[int] | None = None,
     college: str | None = None,
@@ -40,6 +41,8 @@ def build_attendance_query(
     )
     if teacher_course_ids is not None:
         q = q.filter(Attendance.course_id.in_(teacher_course_ids)) if teacher_course_ids else q.filter(False)
+    if task_id:
+        q = q.filter(Attendance.task_id == task_id)
     if course_id:
         q = q.filter(Attendance.course_id == course_id)
     if college:
@@ -49,13 +52,14 @@ def build_attendance_query(
     if end_time:
         q = q.filter(Attendance.check_time <= end_time)
     if search_query:
-        q = q.filter(or_(Student.name.like(f"%{search_query}%"), Student.student_no == search_query))
+        q = q.filter(or_(Student.name.like(f"%{search_query}%"), Student.student_no.like(f"%{search_query}%")))
     return q
 
 
 def query_attendance_joined(
     db: Session,
     *,
+    task_id: int | None = None,
     course_id: int | None = None,
     teacher_course_ids: list[int] | None = None,
     college: str | None = None,
@@ -67,6 +71,7 @@ def query_attendance_joined(
 ):
     q = build_attendance_query(
         db,
+        task_id=task_id,
         course_id=course_id,
         teacher_course_ids=teacher_course_ids,
         college=college,

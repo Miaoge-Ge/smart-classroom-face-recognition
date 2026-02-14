@@ -8,7 +8,9 @@
             导出 Excel
         </a>
         <button class="btn btn-outline-secondary" type="button" id="printHistoryBtn">打印报表</button>
+        {% if user.role == 'admin' %}
         <button class="btn btn-danger" type="submit" form="attendanceDeleteForm" id="deleteSelectedAttendanceBtn">删除所选</button>
+        {% endif %}
     </div>
 </div>
 
@@ -17,13 +19,13 @@
         <form class="row g-2 align-items-end" method="get" action="/history">
             <div class="col-md-2">
                 <label class="form-label small text-muted">开始日期</label>
-                <input class="form-control" type="date" name="start_date" value="{{ current_start_date or '' }}">
+                <input class="form-control" type="text" name="start_date" placeholder="YYYY/MM/DD" inputmode="numeric" value="{{ (current_start_date or '').replace('-', '/') }}">
             </div>
             <div class="col-md-2">
                 <label class="form-label small text-muted">结束日期</label>
-                <input class="form-control" type="date" name="end_date" value="{{ current_end_date or '' }}">
+                <input class="form-control" type="text" name="end_date" placeholder="YYYY/MM/DD" inputmode="numeric" value="{{ (current_end_date or '').replace('-', '/') }}">
             </div>
-            <div class="col-md-3">
+            <div class="col-md-2">
                 <label class="form-label small text-muted">课程选择</label>
                 <select class="form-select" name="course_id">
                     <option value="">所有课程</option>
@@ -41,7 +43,7 @@
                     {% endfor %}
                 </select>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-2">
                 <label class="form-label small text-muted">姓名/学号</label>
                 <input class="form-control" type="search" name="search_query" placeholder="输入姓名或学号" value="{{ current_search or '' }}">
             </div>
@@ -80,6 +82,58 @@
     </div>
 </div>
 
+<div class="card shadow mb-3">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-2">
+            <div class="fw-bold">缺勤统计{% if stats.course_name %}（{{ stats.course_name }}）{% endif %}</div>
+        </div>
+        <div class="row g-2 mb-3">
+            <div class="col-4">
+                <div class="border rounded p-2 text-center">
+                    <div class="text-muted small">应到</div>
+                    <div class="fs-5 fw-bold">{{ stats.expected_count }}</div>
+                </div>
+            </div>
+            <div class="col-4">
+                <div class="border rounded p-2 text-center">
+                    <div class="text-muted small">实到</div>
+                    <div class="fs-5 fw-bold text-success">{{ stats.actual_count }}</div>
+                </div>
+            </div>
+            <div class="col-4">
+                <div class="border rounded p-2 text-center">
+                    <div class="text-muted small">缺勤</div>
+                    <div class="fs-5 fw-bold text-danger">{{ stats.absent_count }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="table-responsive" style="max-height: 260px;">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width: 140px;">学号</th>
+                        <th style="width: 160px;">姓名</th>
+                        <th>班级</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if stats.absent_list and stats.absent_list|length > 0 %}
+                        {% for it in stats.absent_list %}
+                        <tr>
+                            <td>{{ it.student_no }}</td>
+                            <td>{{ it.name }}</td>
+                            <td>{{ it.class_name }}</td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr><td colspan="3" class="text-muted">暂无缺勤</td></tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
 <div class="card shadow">
     <div class="card-body">
         <form id="attendanceDeleteForm" action="/api/delete_attendance" method="post">
@@ -88,7 +142,7 @@
                     <thead class="table-light">
                         <tr>
                             <th style="width: 44px;">
-                                <input class="form-check-input" type="checkbox" id="attendanceSelectAll">
+                                <input class="form-check-input" type="checkbox" id="attendanceSelectAll" {% if user.role != 'admin' %}disabled{% endif %}>
                             </th>
                             <th style="width: 70px;">序号</th>
                             <th style="width: 140px;">学号</th>
@@ -105,7 +159,7 @@
                         {% for record in records %}
                         <tr>
                             <td>
-                                <input class="form-check-input attendance-row" type="checkbox" name="ids" value="{{ record.record_id }}">
+                                <input class="form-check-input attendance-row" type="checkbox" name="ids" value="{{ record.record_id }}" {% if user.role != 'admin' %}disabled{% endif %}>
                             </td>
                             <td>{{ (page - 1) * page_size + loop.index }}</td>
                             <td>{{ record.student_id }}</td>
