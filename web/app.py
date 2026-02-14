@@ -1907,6 +1907,7 @@ async def update_settings(
         config.setdefault("capture", {})
         config.setdefault("performance", {})
         config.setdefault("security", {})
+        similarity_threshold = round(float(similarity_threshold), 2)
         config["detector"]["model_path"] = f"models/weights/detection/{det_model}"
         config["recognition"]["weights_path"] = f"models/weights/recognition/{rec_model}"
         config["recognition"]["similarity_threshold"] = float(similarity_threshold)

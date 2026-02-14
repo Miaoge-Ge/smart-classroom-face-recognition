@@ -1,8 +1,18 @@
+attendance:
+  dedup_seconds: 60
+capture:
+  frame_interval_ms: 200
+  height: 480
+  jpeg_quality: 0.6
+  width: 640
 detector:
   conf_threshold: 0.1
   device: auto
   model_path: models/weights/detection/yolo11n-pose.pt
   model_type: yolo
+performance:
+  max_inference_concurrency: 2
+  max_ws_connections: 32
 preprocess:
   input_size:
   - 112
@@ -19,17 +29,7 @@ recognition:
   backbone_type: resnet50
   device: auto
   embedding_size: 512
-  similarity_threshold: 0.5
-  weights_path: models/weights/recognition/resnet50/AdaFace.pth
-attendance:
-  dedup_seconds: 60
-capture:
-  width: 1280
-  height: 720
-  frame_interval_ms: 33
-  jpeg_quality: 0.7
-performance:
-  max_inference_concurrency: 2
-  max_ws_connections: 32
+  similarity_threshold: 0.6
+  weights_path: models/weights/recognition/fastcontextface/adaface.pth
 security:
   force_https: false
