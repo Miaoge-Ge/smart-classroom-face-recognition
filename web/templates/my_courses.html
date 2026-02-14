@@ -7,32 +7,34 @@
 
 <div class="card shadow mb-4">
     <div class="card-body">
-        <table class="table table-hover">
-            <thead>
-                <tr>
-                    <th>课程名称</th>
-                    <th>课程编码</th>
-                    <th>上课时间</th>
-                    <th>签到记录数</th>
-                    <th>签到人数</th>
-                    <th>操作</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for c in courses %}
-                <tr>
-                    <td>{{ c.name }}</td>
-                    <td>{{ c.code }}</td>
-                    <td>{{ c.schedule_time or '-' }}</td>
-                    <td>{{ c.total_records }}</td>
-                    <td>{{ c.unique_students }}</td>
-                    <td>
-                        <a class="btn btn-sm btn-outline-primary" href="/history?course_id={{ c.id }}">查看记录</a>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>课程名称</th>
+                        <th>课程编码</th>
+                        <th>上课时间</th>
+                        <th>签到记录数</th>
+                        <th>签到人数</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for c in courses %}
+                    <tr>
+                        <td>{{ c.name }}</td>
+                        <td>{{ c.code }}</td>
+                        <td>{{ c.schedule_time or '-' }}</td>
+                        <td>{{ c.total_records }}</td>
+                        <td>{{ c.unique_students }}</td>
+                        <td>
+                            <a class="btn btn-sm btn-outline-primary" href="/history?course_id={{ c.id }}">查看记录</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
 </div>
 {% endblock %}

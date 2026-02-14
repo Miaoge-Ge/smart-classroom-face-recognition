@@ -55,38 +55,39 @@
                 <h6 class="m-0 font-weight-bold text-primary">账号列表</h6>
             </div>
             <div class="card-body">
-                <table class="table table-hover">
-                    <thead>
-                        <tr>
-                            <th>用户名</th>
-                            <th>角色</th>
-                            <th>姓名</th>
-                            <th>绑定学生</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for a in accounts %}
-                        <tr>
-                            <td>{{ a.username }}</td>
-                            <td>{{ a.role }}</td>
-                            <td>{{ a.full_name or '-' }}</td>
-                            <td>{{ a.student_display or '-' }}</td>
-                            <td>
-                                {% if a.username != 'admin' %}
-                                <form action="/api/delete_user" method="post" style="display:inline;">
-                                    <input type="hidden" name="user_id" value="{{ a.id }}">
-                                    <button class="btn btn-sm btn-outline-danger" type="submit">删除</button>
-                                </form>
-                                {% endif %}
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>用户名</th>
+                                <th>角色</th>
+                                <th>姓名</th>
+                                <th>绑定学生</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for a in accounts %}
+                            <tr>
+                                <td>{{ a.username }}</td>
+                                <td>{{ a.role }}</td>
+                                <td>{{ a.full_name or '-' }}</td>
+                                <td>{{ a.student_display or '-' }}</td>
+                                <td>
+                                    {% if a.username != 'admin' %}
+                                    <form action="/api/delete_user" method="post" style="display:inline;">
+                                        <input type="hidden" name="user_id" value="{{ a.id }}">
+                                        <button class="btn btn-sm btn-outline-danger" type="submit">删除</button>
+                                    </form>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>
 </div>
 {% endblock %}
-

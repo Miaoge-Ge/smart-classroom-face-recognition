@@ -120,57 +120,59 @@
         </form>
     </div>
     <div class="card-body">
-        <table class="table table-striped">
-            <thead>
-                <tr>
-                    <th>学号</th>
-                    <th>姓名</th>
-                    <th>班级</th>
-                    <th>性别</th>
-                    <th>学院</th>
-                    <th>人脸照片</th>
-                    <th>操作</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for student in students %}
-                <tr>
-                    <td>{{ student.student_no or '-' }}</td>
-                    <td>{{ student.name }}</td>
-                    <td>{{ student.class_name or '-' }}</td>
-                    <td>{{ student.gender or '-' }}</td>
-                    <td>{{ student.college or '-' }}</td>
-                    <td>
-                        {% if student.face_image_path %}
-                        <img src="/api/student_face?student_id={{ student.student_id }}" style="width: 48px; height: 48px; object-fit: cover; border-radius: 6px;" />
-                        {% else %}
-                        <span class="text-muted small">未注册</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        <div class="d-flex gap-2">
-                            <button
-                                class="btn btn-sm btn-outline-primary"
-                                type="button"
-                                data-bs-toggle="modal"
-                                data-bs-target="#editStudentModal"
-                                data-student-id="{{ student.student_id }}"
-                                data-student-no="{{ student.student_no }}"
-                                data-name="{{ student.name }}"
-                                data-gender="{{ student.gender or '' }}"
-                                data-class-name="{{ student.class_name or '' }}"
-                                data-college="{{ student.college or '' }}"
-                            >编辑</button>
-                            <form action="/api/delete_student" method="post" onsubmit="return confirm('确定删除吗?');">
-                                <input type="hidden" name="student_id" value="{{ student.student_id }}">
-                                <button type="submit" class="btn btn-sm btn-danger">删除</button>
-                            </form>
-                        </div>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>学号</th>
+                        <th>姓名</th>
+                        <th>班级</th>
+                        <th>性别</th>
+                        <th>学院</th>
+                        <th>人脸照片</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for student in students %}
+                    <tr>
+                        <td>{{ student.student_no or '-' }}</td>
+                        <td>{{ student.name }}</td>
+                        <td>{{ student.class_name or '-' }}</td>
+                        <td>{{ student.gender or '-' }}</td>
+                        <td>{{ student.college or '-' }}</td>
+                        <td>
+                            {% if student.face_image_path %}
+                            <img src="/api/student_face?student_id={{ student.student_id }}" style="width: 48px; height: 48px; object-fit: cover; border-radius: 10px;" />
+                            {% else %}
+                            <span class="text-muted small">未注册</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="d-flex gap-2">
+                                <button
+                                    class="btn btn-sm btn-outline-primary"
+                                    type="button"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#editStudentModal"
+                                    data-student-id="{{ student.student_id }}"
+                                    data-student-no="{{ student.student_no }}"
+                                    data-name="{{ student.name }}"
+                                    data-gender="{{ student.gender or '' }}"
+                                    data-class-name="{{ student.class_name or '' }}"
+                                    data-college="{{ student.college or '' }}"
+                                >编辑</button>
+                                <form action="/api/delete_student" method="post" onsubmit="return confirm('确定删除吗?');">
+                                    <input type="hidden" name="student_id" value="{{ student.student_id }}">
+                                    <button type="submit" class="btn btn-sm btn-danger">删除</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
 
         <div class="d-flex justify-content-between align-items-center">
             <div class="text-muted small">共 {{ total_count }} 条，当前第 {{ page }} / {{ total_pages }} 页</div>
