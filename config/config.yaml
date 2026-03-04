@@ -11,7 +11,7 @@ detector:
   model_path: models/weights/detection/yolo11n-pose.pt
   model_type: yolo
 performance:
-  max_inference_concurrency: 2
+  max_inference_concurrency: 6
   max_ws_connections: 32
 preprocess:
   input_size:
@@ -30,6 +30,6 @@ recognition:
   device: auto
   embedding_size: 512
   similarity_threshold: 0.6
-  weights_path: models/weights/recognition/fastcontextface/adaface.pth
+  weights_path: models/weights/recognition/fastcontextface/arcface.pth
 security:
   force_https: false
