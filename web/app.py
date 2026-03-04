@@ -113,6 +113,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 # Global Service
 service = None
+service_init_error = None
 logger = logging.getLogger("systems.web")
 
 def _write_attendance_batch_sync(items: list[dict]):
@@ -179,7 +180,7 @@ async def _dedup_cleanup_worker(app: FastAPI):
 
 def ensure_schema():
     expected = {
-        "students": {"student_id", "student_no", "name", "class_name", "college", "gender", "face_image_path", "face_embedding_enc", "created_at"},
+        "students": {"student_id", "student_no", "name", "class_name", "college", "gender", "face_image_path", "face_embedding_enc", "face_embedding_model_sig", "created_at"},
         "courses": {"course_id", "course_no", "course_name", "teacher", "schedule", "start_time", "end_time", "location", "class_names", "created_at"},
         "attendances": {"record_id", "student_id", "course_id", "task_id", "check_time", "confidence", "status", "created_at"},
         "attendance_tasks": {"task_id", "title", "course_id", "class_name", "status", "start_time", "end_time", "created_by", "created_at"},
@@ -240,6 +241,7 @@ def ensure_schema():
                 "  gender VARCHAR,"
                 "  face_image_path VARCHAR,"
                 "  face_embedding_enc TEXT,"
+                "  face_embedding_model_sig VARCHAR,"
                 "  created_at DATETIME"
                 ")"
             )
@@ -450,12 +452,13 @@ def ensure_schema():
                 expr_gender = "gender" if "gender" in old_cols else "NULL"
                 expr_face_path = "face_image_path" if "face_image_path" in old_cols else "NULL"
                 expr_face_emb = "face_embedding_enc" if "face_embedding_enc" in old_cols else "NULL"
+                expr_face_sig = "face_embedding_model_sig" if "face_embedding_model_sig" in old_cols else "NULL"
                 expr_created = "created_at" if "created_at" in old_cols else "NULL"
 
                 conn.execute(
                     text(
-                        "INSERT INTO students(student_id, student_no, name, class_name, college, gender, face_image_path, face_embedding_enc, created_at) "
-                        f"SELECT {expr_student_id}, {expr_student_no}, {expr_name}, {expr_class}, {expr_college}, {expr_gender}, {expr_face_path}, {expr_face_emb}, {expr_created} "
+                        "INSERT INTO students(student_id, student_no, name, class_name, college, gender, face_image_path, face_embedding_enc, face_embedding_model_sig, created_at) "
+                        f"SELECT {expr_student_id}, {expr_student_no}, {expr_name}, {expr_class}, {expr_college}, {expr_gender}, {expr_face_path}, {expr_face_emb}, {expr_face_sig}, {expr_created} "
                         "FROM students_old"
                     )
                 )
@@ -612,15 +615,17 @@ def ensure_schema():
 ensure_schema()
 
 def init_service():
-    global service
-    print("Initializing Face Service...")
+    global service, service_init_error
+    logger.info("Initializing Face Service...")
     try:
-        # Reload config
         new_config = Config()
         service = FaceRecognitionService(config=new_config)
-        print("Face Service Initialized Successfully.")
+        service_init_error = None
+        logger.info("Face Service Initialized Successfully.")
     except Exception as e:
-        print(f"Error initializing service: {e}")
+        service = None
+        service_init_error = str(e)
+        logger.exception("Error initializing face service: %s", e)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -2427,6 +2432,8 @@ async def register_face(
                 f.write(encrypt_bytes(raw_bytes))
             student.face_image_path = file_path
             student.face_embedding_enc = embedding_enc
+            if getattr(service, "model_sig", None):
+                student.face_embedding_model_sig = service.model_sig
             service.known_faces[student.name] = feats[0]
             
             db.commit()
@@ -2564,6 +2571,8 @@ async def update_student(
             stu.face_image_path = file_path
             embedding_raw = feats[0].detach().cpu().numpy().astype(np.float32).tobytes()
             stu.face_embedding_enc = encrypt_to_b64(embedding_raw)
+            if getattr(service, "model_sig", None):
+                stu.face_embedding_model_sig = service.model_sig
             service.known_faces[stu.name] = feats[0]
 
         if old_name != stu.name and service:

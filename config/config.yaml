@@ -26,10 +26,9 @@ preprocess:
   - 0.5
   - 0.5
 recognition:
-  backbone_type: resnet50
   device: auto
   embedding_size: 512
   similarity_threshold: 0.6
-  weights_path: models/weights/recognition/fastcontextface/arcface.pth
+  weights_path: models/weights/recognition/resnet50/AdaFace.pth
 security:
   force_https: false

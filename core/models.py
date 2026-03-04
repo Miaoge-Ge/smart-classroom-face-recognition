@@ -63,6 +63,7 @@ class Student(Base):
     
     face_image_path = Column(String) # Path to the original registered image
     face_embedding_enc = Column(Text, nullable=True)
+    face_embedding_model_sig = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
 
     attendances = relationship("Attendance", back_populates="student", cascade="all, delete-orphan")

@@ -1,6 +1,8 @@
 import torch
 import os
 import numpy as np
+import hashlib
+import json
 from PIL import Image
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
@@ -20,6 +22,46 @@ try:
 except Exception:
     _crypto_ok = False
 
+
+def _infer_backbone_type_from_weights_path(weights_path: str | None) -> str | None:
+    if not weights_path:
+        return None
+    p = os.path.normpath(str(weights_path)).replace("\\", "/").lower()
+    if "/recognition/resnet50/" in p:
+        return "resnet50"
+    if "/recognition/resnet10/" in p:
+        return "resnet10"
+    if "/recognition/fastcontextface/" in p:
+        return "fastcontextface"
+    return None
+
+
+def _compute_model_sig(
+    backbone_type: str,
+    embedding_size: int,
+    weights_path: str,
+    preprocess_cfg,
+) -> str:
+    p = os.path.abspath(str(weights_path))
+    try:
+        st = os.stat(p)
+        weights_meta = {"path": p, "size": int(st.st_size), "mtime_ns": int(st.st_mtime_ns)}
+    except Exception:
+        weights_meta = {"path": p}
+    prep = preprocess_cfg or {}
+    payload = {
+        "backbone_type": str(backbone_type),
+        "embedding_size": int(embedding_size),
+        "weights": weights_meta,
+        "preprocess": {
+            "input_size": prep.get("input_size"),
+            "mean": prep.get("mean"),
+            "std": prep.get("std"),
+        },
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
 class FaceRecognitionService:
     def __init__(self, config=None):
         """
@@ -34,12 +76,25 @@ class FaceRecognitionService:
         print(f"Initializing Face Service on {self.device}...")
         
         # 1. 初始化识别模型
-        rec_cfg = self.cfg.recognition
-        self.model = ModelFactory.create_backbone(
-            rec_cfg['backbone_type'], 
-            rec_cfg['embedding_size']
+        rec_cfg = dict(self.cfg.recognition or {})
+        weights_path = rec_cfg.get("weights_path")
+        backbone_type = _infer_backbone_type_from_weights_path(weights_path) or rec_cfg.get("backbone_type")
+        embedding_size = rec_cfg.get("embedding_size", 512)
+        if not backbone_type:
+            raise RuntimeError("recognition.backbone_type 未配置，且无法从 weights_path 推断")
+        if not weights_path:
+            raise RuntimeError("recognition.weights_path 未配置")
+        self.model_sig = _compute_model_sig(
+            backbone_type=backbone_type,
+            embedding_size=embedding_size,
+            weights_path=weights_path,
+            preprocess_cfg=self.cfg.preprocess,
         )
-        self._load_weights(rec_cfg['weights_path'])
+        self.model = ModelFactory.create_backbone(
+            backbone_type,
+            embedding_size,
+        )
+        self._load_weights(weights_path)
         self.model.to(self.device)
         self.model.eval()
         
@@ -76,11 +131,12 @@ class FaceRecognitionService:
         db = SessionLocal()
         try:
             students = db.query(Student).all()
+            pending_updates = 0
             for s in students:
                 if not s.name:
                     continue
-
-                if _crypto_ok and getattr(s, "face_embedding_enc", None):
+                sig_ok = getattr(s, "face_embedding_model_sig", None) == getattr(self, "model_sig", None)
+                if _crypto_ok and sig_ok and getattr(s, "face_embedding_enc", None):
                     try:
                         raw = decrypt_from_b64(s.face_embedding_enc)
                         vec = np.frombuffer(raw, dtype=np.float32)
@@ -111,16 +167,22 @@ class FaceRecognitionService:
 
                     if feats:
                         self.known_faces[s.name] = feats[0]
-                        if _crypto_ok and not getattr(s, "face_embedding_enc", None):
+                        if _crypto_ok and getattr(self, "model_sig", None):
                             try:
                                 raw = feats[0].detach().cpu().numpy().astype(np.float32).tobytes()
                                 s.face_embedding_enc = encrypt_to_b64(raw)
+                                s.face_embedding_model_sig = self.model_sig
                                 db.add(s)
-                                db.commit()
+                                pending_updates += 1
+                                if pending_updates >= 50:
+                                    db.commit()
+                                    pending_updates = 0
                             except Exception:
                                 db.rollback()
                 except Exception as e:
                     print(f"Error loading face for {s.name}: {e}")
+            if pending_updates:
+                db.commit()
             print(f"Loaded {len(self.known_faces)} faces from database.")
         finally:
             db.close()
