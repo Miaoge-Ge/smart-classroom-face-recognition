@@ -31,4 +31,4 @@ recognition:
   similarity_threshold: 0.6
   weights_path: models/weights/recognition/resnet50/AdaFace.pth
 security:
-  force_https: false
+  force_https: false 
