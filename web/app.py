@@ -150,18 +150,38 @@ def _write_attendance_batch_sync(items: list[dict]):
 async def _attendance_writer_worker(queue: asyncio.Queue):
     batch: list[dict] = []
     last_flush = time.monotonic()
-    while True:
-        try:
-            item = await asyncio.wait_for(queue.get(), timeout=0.2)
-            batch.append(item)
-        except asyncio.TimeoutError:
-            item = None
 
-        now = time.monotonic()
-        if batch and (len(batch) >= 50 or (now - last_flush) >= 0.5):
-            await asyncio.to_thread(_write_attendance_batch_sync, batch)
-            batch = []
-            last_flush = now
+    async def flush_batch() -> None:
+        nonlocal batch, last_flush
+        if not batch:
+            return
+        pending = list(batch)
+        batch = []
+        try:
+            await asyncio.to_thread(_write_attendance_batch_sync, pending)
+        except Exception:
+            logger.exception("Failed to flush attendance batch", extra={"batch_size": len(pending)})
+        last_flush = time.monotonic()
+
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=0.2)
+                batch.append(item)
+            except asyncio.TimeoutError:
+                item = None
+
+            now = time.monotonic()
+            if batch and (len(batch) >= 50 or (now - last_flush) >= 0.5):
+                await flush_batch()
+    except asyncio.CancelledError:
+        try:
+            while True:
+                batch.append(queue.get_nowait())
+        except asyncio.QueueEmpty:
+            pass
+        await flush_batch()
+        raise
 
 
 async def _dedup_cleanup_worker(app: FastAPI):
@@ -782,6 +802,22 @@ def parse_date_param(value: str | None, *, end: bool) -> datetime | None:
             return dt.replace(hour=23, minute=59, second=59, microsecond=999999)
         return dt.replace(hour=0, minute=0, second=0, microsecond=0)
     return dt
+
+
+def _normalize_tabular_text(value) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    if isinstance(value, (int, np.integer)):
+        return str(int(value))
+    if isinstance(value, (float, np.floating)):
+        if float(value).is_integer():
+            return str(int(value))
+    return str(value).strip()
 
 # --- Pages ---
 
@@ -2073,21 +2109,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 db.close()
 
         teacher_course_ids = await load_teacher_courses()
-        name_to_student_id: dict[str, int] = {}
         roster: dict[int, dict] = {}
         roster_ids: set[int] = set()
         current_course_id: int | None = None
         current_task_id: int | None = None
         last_stats_refresh = 0.0
         cached_stats = {"expected": 0, "actual": 0, "absent_count": 0, "absent_list": []}
-
-        def resolve_student_id_sync(student_name: str) -> int | None:
-            db = SessionLocal()
-            try:
-                row = db.query(Student.student_id).filter(Student.name == student_name).first()
-                return row[0] if row else None
-            finally:
-                db.close()
 
         def load_course_students_sync(cid: int):
             db = SessionLocal()
@@ -2263,35 +2290,35 @@ async def websocket_endpoint(websocket: WebSocket):
 
             for res in results:
                 name = res.get("name")
-                if name and name != "Unknown":
-                    sid = name_to_student_id.get(name)
-                    if sid is None:
-                        sid = await asyncio.to_thread(resolve_student_id_sync, name)
-                        if sid:
-                            name_to_student_id[name] = sid
-                    if sid and current_course_id:
-                        enforce_roster = bool(roster_ids)
-                        if enforce_roster and int(sid) not in roster_ids:
-                            continue
-                        key = (int(current_course_id), int(current_task_id or 0), int(sid))
-                        async with app.state.dedup_lock:
-                            last = app.state.dedup_cache.get(key)
-                            if not last or (now - last).total_seconds() > dedup_seconds:
-                                try:
-                                    app.state.attendance_queue.put_nowait(
-                                        {
-                                            "student_id": int(sid),
-                                            "course_id": int(current_course_id),
-                                            "task_id": int(current_task_id) if current_task_id else None,
-                                            "confidence": res.get("score"),
-                                            "check_time": now,
-                                            "created_at": now,
-                                            "status": "已签到",
-                                        }
-                                    )
-                                    app.state.dedup_cache[key] = now
-                                except Exception:
-                                    pass
+                sid = res.get("student_id")
+                if sid is not None:
+                    try:
+                        sid = int(sid)
+                    except Exception:
+                        sid = None
+                if sid and current_course_id:
+                    enforce_roster = bool(roster_ids)
+                    if enforce_roster and int(sid) not in roster_ids:
+                        continue
+                    key = (int(current_course_id), int(current_task_id or 0), int(sid))
+                    async with app.state.dedup_lock:
+                        last = app.state.dedup_cache.get(key)
+                        if not last or (now - last).total_seconds() > dedup_seconds:
+                            try:
+                                app.state.attendance_queue.put_nowait(
+                                    {
+                                        "student_id": int(sid),
+                                        "course_id": int(current_course_id),
+                                        "task_id": int(current_task_id) if current_task_id else None,
+                                        "confidence": res.get("score"),
+                                        "check_time": now,
+                                        "created_at": now,
+                                        "status": "已签到",
+                                    }
+                                )
+                                app.state.dedup_cache[key] = now
+                            except Exception:
+                                pass
 
                 current_faces.append(
                     {
@@ -2434,7 +2461,7 @@ async def register_face(
             student.face_embedding_enc = embedding_enc
             if getattr(service, "model_sig", None):
                 student.face_embedding_model_sig = service.model_sig
-            service.known_faces[student.name] = feats[0]
+            service.upsert_known_face(student.student_id, student.name, feats[0], student.student_no)
             
             db.commit()
             write_audit_log(
@@ -2472,8 +2499,8 @@ async def delete_student(request: Request, student_id: int = Form(...), db: Sess
             db.commit()
             
             # Remove from memory cache
-            if service and stu.name in service.known_faces:
-                del service.known_faces[stu.name]
+            if service:
+                service.remove_known_face(stu.student_id)
             write_audit_log(
                 actor_username=user.get("username"),
                 actor_role=user.get("role"),
@@ -2573,11 +2600,12 @@ async def update_student(
             stu.face_embedding_enc = encrypt_to_b64(embedding_raw)
             if getattr(service, "model_sig", None):
                 stu.face_embedding_model_sig = service.model_sig
-            service.known_faces[stu.name] = feats[0]
+            service.upsert_known_face(stu.student_id, stu.name, feats[0], stu.student_no)
 
-        if old_name != stu.name and service:
-            if old_name in service.known_faces and stu.name not in service.known_faces:
-                service.known_faces[stu.name] = service.known_faces.pop(old_name)
+        if service:
+            existing_feature = service.known_faces.get(int(stu.student_id))
+            if existing_feature is not None:
+                service.upsert_known_face(stu.student_id, stu.name, existing_feature, stu.student_no)
 
         db.commit()
         write_audit_log(
@@ -2652,7 +2680,7 @@ async def export_students(
 async def import_students(request: Request, file: UploadFile = File(...), db: Session = Depends(get_db), user=Depends(require_roles("admin"))):
     try:
         contents = await file.read()
-        df = pd.read_excel(contents)
+        df = pd.read_excel(io.BytesIO(contents))
         
         # Check columns
         required_columns = ['姓名', '学号', '性别', '班级', '学院']
@@ -2661,8 +2689,10 @@ async def import_students(request: Request, file: UploadFile = File(...), db: Se
             
         count = 0
         for _, row in df.iterrows():
-            name = str(row['姓名']).strip()
-            student_id = str(row['学号']).strip()
+            name = _normalize_tabular_text(row.get('姓名'))
+            student_id = _normalize_tabular_text(row.get('学号'))
+            if not name or not student_id:
+                continue
             
             # Skip if exists (by student_id)
             if db.query(Student).filter(Student.student_no == student_id).first():
@@ -2671,9 +2701,9 @@ async def import_students(request: Request, file: UploadFile = File(...), db: Se
             new_student = Student(
                 name=name,
                 student_no=student_id,
-                gender=str(row['性别']).strip(),
-                class_name=str(row['班级']).strip(),
-                college=str(row['学院']).strip(),
+                gender=_normalize_tabular_text(row.get('性别')) or None,
+                class_name=_normalize_tabular_text(row.get('班级')) or None,
+                college=_normalize_tabular_text(row.get('学院')) or None,
                 face_image_path=None # No face initially
             )
             db.add(new_student)

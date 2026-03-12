@@ -122,9 +122,29 @@ class FaceRecognitionService:
         
         # 4. 已知人脸库 (InMemory Cache for fast retrieval)
         self.known_faces = {}
+        self.student_labels = {}
         self._load_faces_from_db()
         
         print("Face Service Initialized Successfully.")
+
+    def _make_student_label(self, name: str | None, student_no: str | None) -> str:
+        display_name = (name or "").strip() or "Unknown"
+        display_no = (student_no or "").strip()
+        return f"{display_name} [{display_no}]" if display_no else display_name
+
+    def upsert_known_face(self, student_id: int | None, name: str | None, feature, student_no: str | None = None):
+        if student_id is None or feature is None:
+            return
+        sid = int(student_id)
+        self.known_faces[sid] = feature
+        self.student_labels[sid] = self._make_student_label(name, student_no)
+
+    def remove_known_face(self, student_id: int | None):
+        if student_id is None:
+            return
+        sid = int(student_id)
+        self.known_faces.pop(sid, None)
+        self.student_labels.pop(sid, None)
 
     def _load_faces_from_db(self):
         """Load registered faces from SQLite to memory"""
@@ -142,7 +162,7 @@ class FaceRecognitionService:
                         vec = np.frombuffer(raw, dtype=np.float32)
                         if vec.size > 0:
                             t = torch.from_numpy(vec).to(self.device)
-                            self.known_faces[s.name] = t
+                            self.upsert_known_face(s.student_id, s.name, t, s.student_no)
                             continue
                     except Exception:
                         pass
@@ -166,7 +186,7 @@ class FaceRecognitionService:
                         feats = self.process_image(s.face_image_path)
 
                     if feats:
-                        self.known_faces[s.name] = feats[0]
+                        self.upsert_known_face(s.student_id, s.name, feats[0], s.student_no)
                         if _crypto_ok and getattr(self, "model_sig", None):
                             try:
                                 raw = feats[0].detach().cpu().numpy().astype(np.float32).tobytes()
@@ -195,22 +215,24 @@ class FaceRecognitionService:
         """
         feats = self.process_image(image_input)
         if feats:
-            # 1. Update InMemory Cache
-            self.known_faces[name] = feats[0]
-            
-            # 2. Save to DB
             db = SessionLocal()
             try:
                 # Check if exists
-                student = db.query(Student).filter(Student.name == name).first()
+                query = db.query(Student)
+                if student_no:
+                    student = query.filter(Student.student_no == student_no).first()
+                else:
+                    student = query.filter(Student.name == name).first()
                 if not student:
                     student = Student(name=name, student_no=student_no or name, face_image_path=image_input)
                     db.add(student)
+                    db.flush()
                 else:
                     student.face_image_path = image_input # Update photo
                     if student_no:
                         student.student_no = student_no
-                
+
+                self.upsert_known_face(student.student_id, student.name, feats[0], student.student_no)
                 db.commit()
                 print(f"Registered user: {name} in DB")
                 return True
@@ -257,24 +279,28 @@ class FaceRecognitionService:
             
             # 3. Match
             best_name = "Unknown"
+            best_student_id = None
             best_score = 0.0
             
             if feat is not None and self.known_faces:
-                for name, known_feat in self.known_faces.items():
+                for student_id, known_feat in self.known_faces.items():
                     # is_same_person 返回 (bool, score)
                     is_same, score = self.is_same_person(feat, known_feat)
                     if score > best_score:
                         best_score = score
                         if is_same:
-                            best_name = name
+                            best_student_id = int(student_id)
+                            best_name = self.student_labels.get(best_student_id, "Unknown")
             
             # 如果最高分没过阈值，依然是 Unknown
             if best_score < self.similarity_threshold:
                 best_name = "Unknown"
+                best_student_id = None
 
             results.append({
                 "box": box,
                 "name": best_name,
+                "student_id": best_student_id,
                 "score": float(best_score)
             })
             
