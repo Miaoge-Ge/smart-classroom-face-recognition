@@ -72,3 +72,13 @@ secrets/
 sql_app.db
 sql_app.db-*
 sql_app.db.bak.*
+sql_app.db.old
+
+# Temporary / Experiment Directories
+temp/
+temppp/
+
+# Media files (test videos/images)
+*.mp4
+*.avi
+*.mkv

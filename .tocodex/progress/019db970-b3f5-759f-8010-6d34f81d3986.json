@@ -1,0 +1,52 @@
+{
+  "taskId": "019db970-b3f5-759f-8010-6d34f81d3986",
+  "todos": [
+    {
+      "id": "771b38912ecdb995940a402a207db7b3",
+      "content": "分析项目结构和核心文件",
+      "status": "completed"
+    },
+    {
+      "id": "0dbb92a756bf426a53094fe6237922a7",
+      "content": "检查剩余未读文件（detector, backbones, templates, static, scripts）",
+      "status": "completed"
+    },
+    {
+      "id": "b254c84e22a487e6966aab0620e90713",
+      "content": "删除多余的临时文件和目录（temppp/, A103.mp4, demo.jpg, test.jpg, sql_app.db.old, sql_app.db.bak.*, attendance_record_demo.html, CODE_REVIEW_REPORT.md）",
+      "status": "completed"
+    },
+    {
+      "id": "9b397fce03119dc2d35783f25361356c",
+      "content": "更新 .gitignore 覆盖临时文件和多余项",
+      "status": "completed"
+    },
+    {
+      "id": "cd0da66289a537a098673082c5c96014",
+      "content": "修复 app.py: SECRET_KEY安全性、datetime.utcnow()弃用、or_导入位置、删除死代码record_attendance_sync",
+      "status": "completed"
+    },
+    {
+      "id": "6836495ff6de83d6f3b0a70a875a463e",
+      "content": "清理未使用的模块（core/responses.py 删除、core/__init__.py 更新）",
+      "status": "completed"
+    },
+    {
+      "id": "f40138de3f0bcb09c7c7ebd3bbfc2609",
+      "content": "删除 starlette.websockets 重复导入",
+      "status": "completed"
+    },
+    {
+      "id": "998832fd8b9a16aeb8ebbebc308bc15d",
+      "content": "修复 yolo_detector.py 重复 desired_pts 变量",
+      "status": "completed"
+    },
+    {
+      "id": "cf9c300c9f8caf4477ae6842da3d76ff",
+      "content": "提交清理后的代码到 git",
+      "status": "in_progress"
+    }
+  ],
+  "lastUpdated": 1776933452659,
+  "status": "active"
+}

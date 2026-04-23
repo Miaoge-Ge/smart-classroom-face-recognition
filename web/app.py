@@ -12,7 +12,7 @@ import pandas as pd
 import io
 import yaml
 import glob
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, WebSocket, UploadFile, File, Form, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -21,13 +21,13 @@ from fastapi.requests import Request
 from fastapi.responses import RedirectResponse
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from sqlalchemy import text
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 # Security imports
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
+from starlette.websockets import WebSocketDisconnect
 from core.security import verify_password, get_password_hash
 
 # Add root to path FIRST before importing local modules
@@ -105,7 +105,13 @@ def _repair_sqlite_course_students_table():
 _repair_sqlite_course_students_table()
 
 # Config
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-keep-it-safe-change-in-production")
+import secrets as _secrets
+_secret_key_env = os.getenv("SECRET_KEY")
+if not _secret_key_env:
+    SECRET_KEY = _secrets.token_urlsafe(32)
+    logging.warning("SECRET_KEY 未设置，已自动生成随机密钥。重启后所有已签发的 JWT 将失效。请通过环境变量 SECRET_KEY 设置固定密钥。")
+else:
+    SECRET_KEY = _secret_key_env
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -746,9 +752,9 @@ def create_access_token(
 ):
     to_encode = {"sub": username, "role": role, "full_name": full_name, "student_id": student_id}
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
@@ -994,8 +1000,6 @@ async def students_page(
     user=Depends(require_roles("admin")),
     db: Session = Depends(get_db),
 ):
-    from sqlalchemy import or_
-
     try:
         page = int(page)
     except Exception:
@@ -2065,8 +2069,6 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.close(code=1008)
             return
 
-        from starlette.websockets import WebSocketDisconnect
-
         async def get_inference_semaphore():
             cur = get_runtime_settings()
             limit = int(cur.get("performance", {}).get("max_inference_concurrency", 2))
@@ -2074,40 +2076,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 app.state.inference_semaphore = asyncio.Semaphore(limit)
                 app.state.inference_semaphore_limit = limit
             return app.state.inference_semaphore
-
-        def record_attendance_sync(student_name: str, course_id: int, confidence: float | None, now: datetime) -> bool:
-            db = SessionLocal()
-            try:
-                stu = db.query(Student).filter(Student.name == student_name).first()
-                if not stu:
-                    return False
-                course = db.query(Course).filter(Course.course_id == course_id).first()
-                if not course:
-                    return False
-                att = Attendance(
-                    student_id=stu.student_id,
-                    check_time=now,
-                    created_at=now,
-                    status="已签到",
-                    course_id=course.course_id,
-                    confidence=confidence,
-                )
-                db.add(att)
-                for i in range(3):
-                    try:
-                        db.commit()
-                        return True
-                    except IntegrityError:
-                        db.rollback()
-                        return False
-                    except OperationalError as e:
-                        db.rollback()
-                        if "locked" in str(e).lower() and i < 2:
-                            time.sleep(0.05 * (2**i))
-                            continue
-                        return False
-            finally:
-                db.close()
 
         async def load_teacher_courses() -> set[int] | None:
             if principal.get("role") != "teacher":
@@ -2674,8 +2642,6 @@ async def export_students(
     user=Depends(require_roles("admin")),
     db: Session = Depends(get_db),
 ):
-    from sqlalchemy import or_
-
     query = db.query(Student)
     if class_name:
         query = query.filter(Student.class_name == class_name)
