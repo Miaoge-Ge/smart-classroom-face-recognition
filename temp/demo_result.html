@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Demo 图片识别</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'PingFang SC', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; margin: 0; background: #0b1220; color: #e5e7eb; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 16px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    h1 { font-size: 18px; margin: 0 0 12px; }
+    .meta { font-size: 13px; color: #9ca3af; margin: 8px 0 16px; }
+    img { width: 100%; height: auto; border-radius: 10px; border: 1px solid #374151; background: #0b1220; }
+    pre { background: #0b1220; border: 1px solid #1f2937; padding: 12px; border-radius: 10px; overflow: auto; }
+    @media (max-width: 900px) { .row { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>非摄像头模式：demo 图片识别效果</h1>
+      <div class="meta">输入：demo.jpg ｜ imgsz：1280 ｜ 推理耗时：2548.9ms ｜ 人脸数：13</div>
+      <div class="row">
+        <div>
+          <div class="meta">原图（对应“摄像头区域”）</div>
+          <img src="demo_input.jpg" alt="input" />
+        </div>
+        <div>
+          <div class="meta">识别后效果（绿：识别姓名｜黑：注册标签）</div>
+          <img src="demo_result.jpg" alt="result" />
+        </div>
+      </div>
+      <div class="meta">识别结果 JSON</div>
+      <pre>[{'box': [175, 559, 251, 645], 'name': 'test_2', 'tag': 'test_2', 'student_id': 13, 'score': 0.9508117437362671}, {'box': [1160, 552, 1231, 628], 'name': 'test_1', 'tag': 'test_1', 'student_id': 12, 'score': 0.9475048780441284}, {'box': [911, 555, 983, 641], 'name': 'test_5', 'tag': 'test_5', 'student_id': 16, 'score': 0.9802789092063904}, {'box': [668, 570, 738, 648], 'name': 'test_4', 'tag': 'test_4', 'student_id': 15, 'score': 0.9735066294670105}, {'box': [429, 558, 501, 638], 'name': 'test_6', 'tag': 'test_6', 'student_id': 17, 'score': 0.9726239442825317}, {'box': [307, 508, 361, 572], 'name': 'test_3', 'tag': 'test_3', 'student_id': 14, 'score': 0.9918344616889954}, {'box': [864, 508, 918, 572], 'name': 'test_7', 'tag': 'test_7', 'student_id': 18, 'score': 0.9636139869689941}, {'box': [494, 510, 550, 571], 'name': 'test_10', 'tag': 'test_10', 'student_id': 21, 'score': 0.9762511849403381}, {'box': [1061, 500, 1115, 558], 'name': 'test_8', 'tag': 'test_8', 'student_id': 19, 'score': 0.955374002456665}, {'box': [680, 491, 735, 552], 'name': 'test_11', 'tag': 'test_11', 'student_id': 22, 'score': 0.9313795566558838}, {'box': [989, 459, 1035, 507], 'name': 'test_9', 'tag': 'test_9', 'student_id': 20, 'score': 0.9020029306411743}, {'box': [392, 470, 436, 519], 'name': 'test_12', 'tag': 'test_12', 'student_id': 23, 'score': 0.9576324820518494}, {'box': [550, 473, 590, 519], 'name': 'test_13', 'tag': 'test_13', 'student_id': 24, 'score': 0.952375054359436}]</pre>
+    </div>
+  </div>
+</body>
+</html>

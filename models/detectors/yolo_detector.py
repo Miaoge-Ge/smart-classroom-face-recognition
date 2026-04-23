@@ -20,6 +20,36 @@ class YOLOFaceDetector:
             print(f"Error loading YOLO model: {e}")
             self.model = None
 
+    @staticmethod
+    def _load_image(image_path_or_array):
+        if isinstance(image_path_or_array, str):
+            image = cv2.imread(image_path_or_array)
+            if image is None:
+                print(f"Error: Cannot read image {image_path_or_array}")
+            return image
+        return image_path_or_array
+
+    @staticmethod
+    def _priority_score(det_info, image_shape):
+        if image_shape is None:
+            return float(det_info.get("score", 0.0))
+
+        h, w = image_shape[:2]
+        x1, y1, x2, y2 = det_info["box"]
+        box_w = max(1.0, float(x2 - x1))
+        box_h = max(1.0, float(y2 - y1))
+        area = box_w * box_h
+
+        center_x = (x1 + x2) / 2.0
+        center_y = (y1 + y2) / 2.0
+        frame_center_x = w / 2.0
+        frame_center_y = h / 2.0
+        center_distance = np.hypot(center_x - frame_center_x, center_y - frame_center_y)
+        frame_radius = max(np.hypot(frame_center_x, frame_center_y), 1.0)
+        center_weight = max(0.35, 1.0 - (center_distance / frame_radius))
+
+        return area * center_weight * max(0.1, float(det_info.get("score", 0.0)))
+
     def align_face(self, image: np.ndarray, keypoints: np.ndarray, output_size: int = 112):
         """
         根据5个关键点进行人脸对齐
@@ -75,52 +105,8 @@ class YOLOFaceDetector:
         核心接口：输入图片，输出检测并对齐后的人脸列表
         :return: list of aligned_face (numpy array BGR)
         """
-        if self.model is None:
-            return []
-
-        if isinstance(image_path_or_array, str):
-            image = cv2.imread(image_path_or_array)
-            if image is None:
-                print(f"Error: Cannot read image {image_path_or_array}")
-                return []
-        else:
-            image = image_path_or_array
-
-        results = self.model.predict(
-            image,
-            conf=self.conf_threshold,
-            device=self.device,
-            verbose=False,
-        )
-
-        aligned_faces = []
-        result = results[0]
-
-        if result.boxes is not None and len(result.boxes) > 0:
-            for i, box in enumerate(result.boxes.xyxy):
-                # 如果有关键点且需要对齐
-                if align and result.keypoints is not None and i < len(result.keypoints.xy):
-                    try:
-                        # YOLO keypoints: (5, 2)
-                        keypoints = result.keypoints.xy[i].cpu().numpy()
-                        face = self.align_face(image, keypoints, output_size)
-                        aligned_faces.append(face)
-                    except Exception as e:
-                        print(f"Alignment failed: {e}")
-                        continue
-                else:
-                    # 如果不需要对齐或没有关键点，直接裁剪
-                    x1, y1, x2, y2 = map(int, box.cpu().numpy())
-                    # 边界检查
-                    h, w = image.shape[:2]
-                    x1, y1 = max(0, x1), max(0, y1)
-                    x2, y2 = min(w, x2), min(h, y2)
-                    face = image[y1:y2, x1:x2]
-                    if face.size > 0:
-                        face = cv2.resize(face, (output_size, output_size))
-                        aligned_faces.append(face)
-        
-        return aligned_faces
+        detections = self.detect_faces(image_path_or_array, align=align, output_size=output_size)
+        return [det["aligned_face"] for det in detections if det.get("aligned_face") is not None]
 
     def detect_faces(self, image_path_or_array, align=True, output_size=112):
         """
@@ -129,11 +115,9 @@ class YOLOFaceDetector:
         if self.model is None:
             return []
 
-        if isinstance(image_path_or_array, str):
-            image = cv2.imread(image_path_or_array)
-            if image is None: return []
-        else:
-            image = image_path_or_array
+        image = self._load_image(image_path_or_array)
+        if image is None:
+            return []
 
         results = self.model.predict(
             image,
@@ -181,5 +165,10 @@ class YOLOFaceDetector:
                 
                 if det_info["aligned_face"] is not None:
                     detections.append(det_info)
+
+        detections.sort(
+            key=lambda det: self._priority_score(det, image.shape if image is not None else None),
+            reverse=True,
+        )
         
         return detections

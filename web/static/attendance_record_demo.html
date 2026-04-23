@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考勤记录样例 - 智慧课堂考勤系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #4e73df;
+            --primary-dark: #224abe;
+            --success-color: #1cc88a;
+            --info-color: #36b9cc;
+            --warning-color: #f6c23e;
+            --danger-color: #e74a3b;
+            --light-color: #f8f9fc;
+            --dark-color: #5a5c69;
+            --border-color: #e3e6f0;
+        }
+
+        body {
+            font-family: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--light-color);
+            color: #3a3b45;
+            min-height: 100vh;
+        }
+
+        #wrapper {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        .sidebar {
+            width: 265px;
+            min-height: 100vh;
+            background: linear-gradient(180deg, var(--primary-color) 10%, var(--primary-dark) 100%);
+            color: #fff;
+            box-shadow: 0 .15rem 1.75rem 0 rgba(58, 59, 69, .15);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-brand {
+            height: 88px;
+            display: flex;
+            align-items: center;
+            padding: 0 1.35rem;
+            color: #fff;
+            text-decoration: none;
+            font-size: 1.12rem;
+            font-weight: 800;
+            border-bottom: 1px solid rgba(255, 255, 255, .14);
+        }
+
+        .sidebar-brand i {
+            margin-right: .6rem;
+            font-size: 1.5rem;
+        }
+
+        .sidebar-section {
+            padding: 1.1rem 0 .35rem;
+            border-bottom: 1px solid rgba(255, 255, 255, .14);
+        }
+
+        .sidebar-heading {
+            padding: 0 1rem .55rem;
+            color: rgba(255, 255, 255, .95);
+            font-size: .72rem;
+            font-weight: 700;
+            letter-spacing: .04rem;
+        }
+
+        .sidebar .nav-item {
+            list-style: none;
+        }
+
+        .sidebar .nav-link {
+            color: rgba(255, 255, 255, .82);
+            padding: .92rem 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: .65rem;
+            border-radius: 0;
+        }
+
+        .sidebar .nav-link:hover,
+        .sidebar .nav-item.active .nav-link {
+            color: #fff;
+            background-color: rgba(255, 255, 255, .12);
+            font-weight: 700;
+        }
+
+        .sidebar .nav-link i {
+            width: 1.2rem;
+            text-align: center;
+        }
+
+        #content-wrapper {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        .topbar {
+            height: 88px;
+            background-color: #fff;
+            box-shadow: 0 .15rem 1.75rem 0 rgba(58, 59, 69, .15);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 2rem;
+        }
+
+        .topbar h1 {
+            font-size: 2rem;
+            margin: 0;
+            color: var(--dark-color);
+            font-weight: 700;
+        }
+
+        .user-dropdown {
+            color: #6e707e;
+            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+            gap: .5rem;
+        }
+
+        .content-area {
+            flex: 1;
+            padding: 2rem 1.5rem;
+        }
+
+        .card {
+            border: none;
+            border-radius: 1rem;
+            box-shadow: 0 .15rem 1.75rem 0 rgba(58, 59, 69, .15);
+            overflow: hidden;
+        }
+
+        .card-header {
+            background-color: #fff;
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 1.25rem;
+        }
+
+        .card-header h6 {
+            margin: 0;
+            font-size: 1.1rem;
+            color: var(--primary-color);
+            font-weight: 700;
+        }
+
+        .stat-card {
+            border-left: .35rem solid var(--primary-color);
+        }
+
+        .stat-card.success {
+            border-left-color: var(--success-color);
+        }
+
+        .stat-card.info {
+            border-left-color: var(--info-color);
+        }
+
+        .stat-card.warning {
+            border-left-color: var(--warning-color);
+        }
+
+        .stat-label {
+            color: #858796;
+            font-size: .8rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .06rem;
+        }
+
+        .stat-value {
+            color: #5a5c69;
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .info-list dt {
+            font-weight: 700;
+            color: #3a3b45;
+        }
+
+        .info-list dd {
+            margin-bottom: 1rem;
+            color: #5a5c69;
+        }
+
+        .demo-note {
+            border: 1px solid #f5c6cb;
+            background: #fff5f5;
+            color: #c53030;
+            border-radius: .75rem;
+            padding: .85rem 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .summary-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: .45rem .8rem;
+            border-radius: 999px;
+            font-size: .85rem;
+            font-weight: 700;
+            margin-right: .5rem;
+            margin-bottom: .5rem;
+            background: #eef2ff;
+            color: var(--primary-dark);
+        }
+
+        .summary-chip.danger {
+            background: #fdeaea;
+            color: var(--danger-color);
+        }
+
+        .table thead th {
+            border-bottom-width: 2px;
+            color: #3a3b45;
+            font-size: .95rem;
+            font-weight: 700;
+            background-color: #fff;
+            white-space: nowrap;
+        }
+
+        .table td {
+            vertical-align: middle;
+            white-space: nowrap;
+        }
+
+        .table-danger-soft {
+            background-color: #fff5f5;
+        }
+
+        .table-danger-soft td {
+            color: #c53030;
+            font-weight: 600;
+        }
+
+        .badge-status {
+            padding: .45rem .8rem;
+            border-radius: 999px;
+            font-size: .8rem;
+            font-weight: 700;
+        }
+
+        .badge-present {
+            background: rgba(28, 200, 138, .15);
+            color: #169b6b;
+        }
+
+        .badge-absent {
+            background: rgba(231, 74, 59, .14);
+            color: var(--danger-color);
+        }
+
+        @media (max-width: 991.98px) {
+            #wrapper {
+                flex-direction: column;
+            }
+
+            .sidebar {
+                width: 100%;
+                min-height: auto;
+            }
+
+            .topbar {
+                padding: 1rem 1.25rem;
+                height: auto;
+            }
+
+            .topbar h1 {
+                font-size: 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="wrapper">
+        <aside class="sidebar">
+            <a class="sidebar-brand" href="javascript:void(0)">
+                <i class="fas fa-user-clock"></i>
+                <span>智慧课堂考勤系统</span>
+            </a>
+
+            <div class="sidebar-section">
+                <div class="sidebar-heading">考勤管理</div>
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="javascript:void(0)">
+                            <i class="fas fa-video"></i>
+                            <span>实时监控</span>
+                        </a>
+                    </li>
+                    <li class="nav-item active">
+                        <a class="nav-link" href="javascript:void(0)">
+                            <i class="fas fa-history"></i>
+                            <span>考勤记录</span>
+                        </a>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="sidebar-section">
+                <div class="sidebar-heading">教务管理</div>
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="javascript:void(0)">
+                            <i class="fas fa-user-graduate"></i>
+                            <span>学生数据管理</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="javascript:void(0)">
+                            <i class="fas fa-book"></i>
+                            <span>课程数据管理</span>
+                        </a>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="sidebar-section">
+                <div class="sidebar-heading">系统设置</div>
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="javascript:void(0)">
+                            <i class="fas fa-cogs"></i>
+                            <span>模型配置</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="javascript:void(0)">
+                            <i class="fas fa-user-shield"></i>
+                            <span>权限管理</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="javascript:void(0)">
+                            <i class="fas fa-clipboard-list"></i>
+                            <span>审计日志</span>
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </aside>
+
+        <div id="content-wrapper">
+            <header class="topbar">
+                <h1>考勤记录</h1>
+                <div class="user-dropdown">
+                    <span>S</span>
+                    <i class="fas fa-caret-down"></i>
+                </div>
+            </header>
+
+            <main class="content-area">
+                <div class="demo-note">
+                    这是一个单独的样例 HTML，页面样式按你当前系统界面做了贴近处理，数据为固定样例。
+                </div>
+
+                <div class="row g-4 mb-4">
+                    <div class="col-xl-3 col-md-6">
+                        <div class="card stat-card h-100">
+                            <div class="card-body">
+                                <div class="stat-label mb-2">应到</div>
+                                <div class="stat-value">17</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-xl-3 col-md-6">
+                        <div class="card stat-card success h-100">
+                            <div class="card-body">
+                                <div class="stat-label mb-2">实到</div>
+                                <div class="stat-value">17</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-xl-3 col-md-6">
+                        <div class="card stat-card info h-100">
+                            <div class="card-body">
+                                <div class="stat-label mb-2">缺勤人数</div>
+                                <div class="stat-value text-danger">1</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-xl-3 col-md-6">
+                        <div class="card stat-card warning h-100">
+                            <div class="card-body">
+                                <div class="stat-label mb-2">平均置信度</div>
+                                <div class="stat-value">0.832</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row g-4">
+                    <div class="col-lg-4">
+                        <div class="card h-100">
+                            <div class="card-header">
+                                <h6>考勤信息</h6>
+                            </div>
+                            <div class="card-body">
+                                <dl class="info-list mb-0">
+                                    <dt>班级</dt>
+                                    <dd>test1</dd>
+                                    <dt>课程</dt>
+                                    <dd>C语言程序设计</dd>
+                                    <dt>考勤时间</dt>
+                                    <dd>2026/03/29 16:00:15</dd>
+                                    <dt>缺勤学生</dt>
+                                    <dd class="text-danger mb-0">test_16（016）</dd>
+                                </dl>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-lg-8">
+                        <div class="card h-100">
+                            <div class="card-header">
+                                <h6>状态摘要</h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="summary-chip">班级：test1</div>
+                                <div class="summary-chip">课程：C语言程序设计</div>
+                                <div class="summary-chip">时间：2026/03/29 16:00:15</div>
+                                <div class="summary-chip">学号从 001 开始</div>
+                                <div class="summary-chip danger">1 名缺勤红色显示</div>
+                                <hr>
+                                <p class="text-muted mb-0">
+                                    共有 17 条样例记录，已签到记录的置信度值均位于 0.8 ± 0.2 范围内，平均值已按页面展示数据计算完成。
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card shadow mt-4">
+                    <div class="card-header py-3 d-flex justify-content-between align-items-center">
+                        <h6 class="m-0">考勤记录列表</h6>
+                        <div class="text-muted small"></div>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>序号</th>
+                                        <th>学号</th>
+                                        <th>姓名</th>
+                                        <th>班级</th>
+                                        <th>课程</th>
+                                        <th>考勤时间</th>
+                                        <th>置信度</th>
+                                        <th>状态</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>1</td>
+                                        <td>001</td>
+                                        <td>test_01</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.822</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>2</td>
+                                        <td>002</td>
+                                        <td>test_02</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.652</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>3</td>
+                                        <td>003</td>
+                                        <td>test_03</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.960</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>4</td>
+                                        <td>004</td>
+                                        <td>test_04</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.916</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>5</td>
+                                        <td>005</td>
+                                        <td>test_05</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.803</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>6</td>
+                                        <td>006</td>
+                                        <td>test_06</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.862</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>7</td>
+                                        <td>007</td>
+                                        <td>test_07</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.828</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>8</td>
+                                        <td>008</td>
+                                        <td>test_08</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.708</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>9</td>
+                                        <td>009</td>
+                                        <td>test_09</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.724</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>10</td>
+                                        <td>010</td>
+                                        <td>test_10</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.905</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>11</td>
+                                        <td>011</td>
+                                        <td>test_11</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.664</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>12</td>
+                                        <td>012</td>
+                                        <td>test_12</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.831</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>13</td>
+                                        <td>013</td>
+                                        <td>test_13</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.949</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>14</td>
+                                        <td>014</td>
+                                        <td>test_14</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.911</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>15</td>
+                                        <td>015</td>
+                                        <td>test_15</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.826</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                    <tr class="table-danger-soft">
+                                        <td>16</td>
+                                        <td>016</td>
+                                        <td>test_16</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>-</td>
+                                        <td><span class="badge-status badge-absent">缺勤</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>17</td>
+                                        <td>017</td>
+                                        <td>test_17</td>
+                                        <td>test1</td>
+                                        <td>C语言程序设计</td>
+                                        <td>2026/03/29 16:00:15</td>
+                                        <td>0.956</td>
+                                        <td><span class="badge-status badge-present">已签到</span></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+</body>
+</html>

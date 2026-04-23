@@ -22,17 +22,58 @@ try:
 except Exception:
     _crypto_ok = False
 
+_LEGACY_RECOGNITION_DIR_ALIASES = {
+    "fastcontextface": "nexnet",
+}
+
+
+def _normalize_backbone_type(backbone_type: str | None) -> str | None:
+    if not backbone_type:
+        return None
+    value = str(backbone_type).strip().lower()
+    return _LEGACY_RECOGNITION_DIR_ALIASES.get(value, value)
+
+
+def _normalize_recognition_weights_path(weights_path: str | None) -> str | None:
+    if not weights_path:
+        return weights_path
+    path_str = str(weights_path).replace("\\", "/")
+    lowered = path_str.lower()
+    for legacy_dir, canonical_dir in _LEGACY_RECOGNITION_DIR_ALIASES.items():
+        legacy_token = f"/recognition/{legacy_dir}/"
+        idx = lowered.find(legacy_token)
+        if idx >= 0:
+            suffix_start = idx + len(legacy_token)
+            return os.path.normpath(
+                f"{path_str[:idx]}/recognition/{canonical_dir}/{path_str[suffix_start:]}"
+            )
+    return os.path.normpath(path_str)
+
+
+def _resolve_recognition_weights_path(weights_path: str | None) -> str | None:
+    normalized = _normalize_recognition_weights_path(weights_path)
+    candidates = []
+    if normalized:
+        candidates.append(normalized)
+    if weights_path and os.path.normcase(str(weights_path)) != os.path.normcase(str(normalized)):
+        candidates.append(os.path.normpath(str(weights_path)))
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return normalized or weights_path
+
 
 def _infer_backbone_type_from_weights_path(weights_path: str | None) -> str | None:
     if not weights_path:
         return None
-    p = os.path.normpath(str(weights_path)).replace("\\", "/").lower()
+    p = str(_normalize_recognition_weights_path(weights_path) or weights_path)
+    p = os.path.normpath(p).replace("\\", "/").lower()
     if "/recognition/resnet50/" in p:
         return "resnet50"
     if "/recognition/resnet10/" in p:
         return "resnet10"
-    if "/recognition/fastcontextface/" in p:
-        return "fastcontextface"
+    if "/recognition/nexnet/" in p or "/recognition/fastcontextface/" in p:
+        return "nexnet"
     return None
 
 
@@ -77,8 +118,8 @@ class FaceRecognitionService:
         
         # 1. 初始化识别模型
         rec_cfg = dict(self.cfg.recognition or {})
-        weights_path = rec_cfg.get("weights_path")
-        backbone_type = _infer_backbone_type_from_weights_path(weights_path) or rec_cfg.get("backbone_type")
+        weights_path = _resolve_recognition_weights_path(rec_cfg.get("weights_path"))
+        backbone_type = _infer_backbone_type_from_weights_path(weights_path) or _normalize_backbone_type(rec_cfg.get("backbone_type"))
         embedding_size = rec_cfg.get("embedding_size", 512)
         if not backbone_type:
             raise RuntimeError("recognition.backbone_type 未配置，且无法从 weights_path 推断")
@@ -385,6 +426,31 @@ class FaceRecognitionService:
         # 注意：这里不再转 numpy，直接返回 tensor 以便进行高效的矩阵运算
         return embedding.squeeze(0) # [1, 512] -> [512]
 
+    def extract_feature_from_aligned_face(self, aligned_face):
+        if aligned_face is None:
+            return None
+
+        face_img_rgb = cv2.cvtColor(aligned_face, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(face_img_rgb)
+        return self.extract_feature(pil_img)
+
+    def extract_primary_feature(self, image_input):
+        """
+        注册场景优先取画面中最主要的人脸，避免多张脸时误取背景人物。
+        Returns:
+            (feature, detections)
+        """
+        if self.detector is None:
+            print("Error: Detector not initialized. Please configure 'detector' in config.yaml")
+            return None, []
+
+        detections = self.detector.detect_faces(image_input)
+        if not detections:
+            return None, []
+
+        feature = self.extract_feature_from_aligned_face(detections[0].get("aligned_face"))
+        return feature, detections
+
     def process_image(self, image_path):
         """
         高层接口: 输入原始大图 -> 检测 -> 对齐 -> 识别
@@ -400,12 +466,7 @@ class FaceRecognitionService:
         
         features = []
         for face_img in aligned_faces:
-            # 2. 转换颜色空间 BGR -> RGB
-            face_img_rgb = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
-            pil_img = Image.fromarray(face_img_rgb)
-            
-            # 3. 提取特征
-            feat = self.extract_feature(pil_img)
+            feat = self.extract_feature_from_aligned_face(face_img)
             if feat is not None:
                 features.append(feat)
                 

@@ -115,6 +115,25 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 service = None
 service_init_error = None
 logger = logging.getLogger("systems.web")
+_RECOGNITION_MODEL_DIR_ALIASES = {
+    "fastcontextface": "nexnet",
+}
+
+
+def _normalize_recognition_model_choice(model_choice: str | None) -> str | None:
+    if not model_choice:
+        return model_choice
+    choice = str(model_choice).replace("\\", "/")
+    prefix = "models/weights/recognition/"
+    relative_choice = choice[len(prefix):] if choice.lower().startswith(prefix) else choice
+    lowered = relative_choice.lower()
+    for legacy_dir, canonical_dir in _RECOGNITION_MODEL_DIR_ALIASES.items():
+        legacy_prefix = f"{legacy_dir}/"
+        if lowered.startswith(legacy_prefix):
+            suffix = relative_choice[len(legacy_prefix):]
+            normalized = f"{canonical_dir}/{suffix}"
+            return f"{prefix}{normalized}" if choice.lower().startswith(prefix) else normalized
+    return choice
 
 def _write_attendance_batch_sync(items: list[dict]):
     db = SessionLocal()
@@ -1024,7 +1043,7 @@ async def students_page(
             "total_count": total_count,
             "total_pages": total_pages,
             "user": user,
-            "title": "学生管理",
+            "title": "学生数据管理",
         },
     )
 
@@ -1397,7 +1416,7 @@ async def courses_page(request: Request, user=Depends(require_roles("admin")), d
         "courses": courses,
         "classes": classes,
         "user": user,
-        "title": "课程管理"
+        "title": "课程数据管理"
     })
 
 @app.post("/api/courses")
@@ -1909,8 +1928,13 @@ async def settings_page(request: Request, user=Depends(require_roles("admin"))):
             for pth in pth_files:
                 # e.g. AdaFace/best.pth
                 rec_models.append(f"{d}/{os.path.basename(pth)}")
+    rec_models.sort()
                 
     current_config = load_raw_config()
+    current_config.setdefault("recognition", {})
+    current_config["recognition"]["weights_path"] = _normalize_recognition_model_choice(
+        current_config["recognition"].get("weights_path")
+    )
             
     return templates.TemplateResponse("settings.html", {
         "request": request,
@@ -1940,6 +1964,10 @@ async def update_settings(
 ):
     try:
         config = load_raw_config()
+        rec_model = _normalize_recognition_model_choice(rec_model)
+        rec_model = str(rec_model or "").replace("\\", "/")
+        if rec_model.lower().startswith("models/weights/recognition/"):
+            rec_model = rec_model.split("models/weights/recognition/", 1)[1]
             
         # Update Config
         config.setdefault("detector", {})
@@ -2406,7 +2434,7 @@ async def register_face(
     user=Depends(require_roles("admin"))
 ):
     if not service:
-        return {"status": "error", "message": "服务未初始化"}
+        return RedirectResponse(url="/students?error=人脸服务未初始化", status_code=303)
         
     # Ensure data/faces exists
     faces_dir = "data/faces"
@@ -2423,13 +2451,18 @@ async def register_face(
         nparr = np.frombuffer(raw_bytes, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if image is None:
-            return {"status": "error", "message": "图片解码失败"}
+            return RedirectResponse(url="/students?error=图片解码失败", status_code=303)
 
-        feats = service.process_image(image)
-        if not feats:
-            return {"status": "error", "message": "未检测到人脸"}
+        feature, detections = service.extract_primary_feature(image)
+        if feature is None:
+            return RedirectResponse(url="/students?error=未检测到清晰人脸，请正对镜头重试", status_code=303)
+        if len(detections) > 1:
+            logger.info(
+                "Multiple faces detected during registration; using primary face",
+                extra={"student_no": student_no, "face_count": len(detections)},
+            )
 
-        embedding_raw = feats[0].detach().cpu().numpy().astype(np.float32).tobytes()
+        embedding_raw = feature.detach().cpu().numpy().astype(np.float32).tobytes()
         embedding_enc = encrypt_to_b64(embedding_raw)
 
         db = SessionLocal()
@@ -2461,7 +2494,7 @@ async def register_face(
             student.face_embedding_enc = embedding_enc
             if getattr(service, "model_sig", None):
                 student.face_embedding_model_sig = service.model_sig
-            service.upsert_known_face(student.student_id, student.name, feats[0], student.student_no)
+            service.upsert_known_face(student.student_id, student.name, feature, student.student_no)
             
             db.commit()
             write_audit_log(
@@ -2480,7 +2513,8 @@ async def register_face(
         return RedirectResponse(url="/students", status_code=303)
             
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        logger.exception("register_face failed: %s", e)
+        return RedirectResponse(url=f"/students?error={str(e)}", status_code=303)
 
 @app.post("/api/delete_student")
 async def delete_student(request: Request, student_id: int = Form(...), db: Session = Depends(get_db), user=Depends(require_roles("admin"))):
@@ -2557,22 +2591,22 @@ async def update_student(
     try:
         stu = db.query(Student).filter(Student.student_id == student_id).first()
         if not stu:
-            return {"status": "error", "message": "学生不存在"}
+            return RedirectResponse(url="/students?error=学生不存在", status_code=303)
 
         old_name = stu.name
         new_student_no = (student_no or "").strip()
         new_name = (name or "").strip()
         if not new_student_no:
-            return {"status": "error", "message": "学号不能为空"}
+            return RedirectResponse(url="/students?error=学号不能为空", status_code=303)
         if not new_name:
-            return {"status": "error", "message": "姓名不能为空"}
+            return RedirectResponse(url="/students?error=姓名不能为空", status_code=303)
         exists = (
             db.query(Student.student_id)
             .filter(Student.student_no == new_student_no, Student.student_id != student_id)
             .first()
         )
         if exists:
-            return {"status": "error", "message": "学号已存在"}
+            return RedirectResponse(url="/students?error=学号已存在", status_code=303)
         stu.student_no = new_student_no
         stu.name = new_name
         stu.gender = (gender or "").strip() or None
@@ -2584,10 +2618,15 @@ async def update_student(
             nparr = np.frombuffer(raw_bytes, np.uint8)
             image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if image is None:
-                return {"status": "error", "message": "图片解码失败"}
-            feats = service.process_image(image)
-            if not feats:
-                return {"status": "error", "message": "未检测到人脸"}
+                return RedirectResponse(url="/students?error=图片解码失败", status_code=303)
+            feature, detections = service.extract_primary_feature(image)
+            if feature is None:
+                return RedirectResponse(url="/students?error=未检测到清晰人脸，请正对镜头重试", status_code=303)
+            if len(detections) > 1:
+                logger.info(
+                    "Multiple faces detected during student update; using primary face",
+                    extra={"student_id": student_id, "face_count": len(detections)},
+                )
 
             faces_dir = "data/faces"
             os.makedirs(faces_dir, exist_ok=True)
@@ -2596,11 +2635,11 @@ async def update_student(
                 f.write(encrypt_bytes(raw_bytes))
 
             stu.face_image_path = file_path
-            embedding_raw = feats[0].detach().cpu().numpy().astype(np.float32).tobytes()
+            embedding_raw = feature.detach().cpu().numpy().astype(np.float32).tobytes()
             stu.face_embedding_enc = encrypt_to_b64(embedding_raw)
             if getattr(service, "model_sig", None):
                 stu.face_embedding_model_sig = service.model_sig
-            service.upsert_known_face(stu.student_id, stu.name, feats[0], stu.student_no)
+            service.upsert_known_face(stu.student_id, stu.name, feature, stu.student_no)
 
         if service:
             existing_feature = service.known_faces.get(int(stu.student_id))
@@ -2621,7 +2660,8 @@ async def update_student(
         return RedirectResponse(url="/students", status_code=303)
     except Exception as e:
         db.rollback()
-        return {"status": "error", "message": str(e)}
+        logger.exception("update_student failed: %s", e)
+        return RedirectResponse(url=f"/students?error={str(e)}", status_code=303)
     finally:
         db.close()
 

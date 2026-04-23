@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考勤记录 - 智慧课堂考勤管理系统</title>
+    <!-- Bootstrap 5 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- FontAwesome -->
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css" rel="stylesheet">
+    <!-- Custom CSS -->
+    <link href="/static/css/admin_style.css" rel="stylesheet">
+    <link href="/static/css/modern.css" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body id="page-top" class="app-shell">
+
+    
+    
+    
+
+    <div id="wrapper" class="d-flex">
+        
+        <!-- Sidebar -->
+        <ul class="navbar-nav sidebar sidebar-dark accordion" id="accordionSidebar">
+            <a class="sidebar-brand d-flex align-items-center justify-content-center" href="/">
+                <div class="sidebar-brand-mark">
+                    <i class="fas fa-user-clock"></i>
+                </div>
+                <div class="sidebar-brand-copy">
+                    <div class="sidebar-brand-text text-nowrap">智慧课堂考勤系统</div>
+                </div>
+            </a>
+
+            <hr class="sidebar-divider my-0">
+
+            
+            
+
+            <hr class="sidebar-divider">
+
+            <div class="sidebar-heading">
+                考勤管理
+            </div>
+
+            
+            <li class="nav-item ">
+                <a class="nav-link" href="/">
+                    <i class="fas fa-fw fa-video"></i>
+                    <span>实时监控</span>
+                </a>
+            </li>
+            
+            <li class="nav-item active">
+                <a class="nav-link" href="/history">
+                    <i class="fas fa-fw fa-history"></i>
+                    <span>考勤记录</span>
+                </a>
+            </li>
+            
+
+            <hr class="sidebar-divider">
+
+            <div class="sidebar-heading">
+                教务管理
+            </div>
+
+            
+            <li class="nav-item ">
+                <a class="nav-link" href="/students">
+                    <i class="fas fa-fw fa-user-graduate"></i>
+                    <span>学生数据管理</span>
+                </a>
+            </li>
+            
+            <li class="nav-item ">
+                <a class="nav-link" href="/courses">
+                    <i class="fas fa-fw fa-book"></i>
+                    <span>课程数据管理</span>
+                </a>
+            </li>
+            
+
+            <hr class="sidebar-divider">
+
+            <div class="sidebar-heading">
+                系统设置
+            </div>
+
+            
+            <li class="nav-item ">
+                <a class="nav-link" href="/settings">
+                    <i class="fas fa-fw fa-cogs"></i>
+                    <span>模型配置</span>
+                </a>
+            </li>
+            <li class="nav-item ">
+                <a class="nav-link" href="/users">
+                    <i class="fas fa-fw fa-user-shield"></i>
+                    <span>权限管理</span>
+                </a>
+            </li>
+            <li class="nav-item ">
+                <a class="nav-link" href="/audit">
+                    <i class="fas fa-fw fa-clipboard-list"></i>
+                    <span>审计日志</span>
+                </a>
+            </li>
+            
+
+            <hr class="sidebar-divider d-none d-md-block">
+        </ul>
+        <!-- End of Sidebar -->
+
+        <!-- Content Wrapper -->
+        <div id="content-wrapper" class="d-flex flex-column w-100">
+
+            <!-- Main Content -->
+            <div id="content">
+
+                <!-- Topbar -->
+                <nav class="navbar navbar-expand navbar-light bg-white topbar mb-4 static-top shadow px-4">
+                    <button id="sidebarToggleTop" class="btn btn-link d-md-none rounded-circle mr-3">
+                        <i class="fa-solid fa-bars-staggered"></i>
+                    </button>
+
+                    <div class="topbar-title-group">
+                        <h4 class="mb-0 text-gray-800">考勤记录</h4>
+                    </div>
+
+                    <ul class="navbar-nav ms-auto">
+                        <div class="topbar-divider d-none d-sm-block"></div>
+                        <li class="nav-item dropdown no-arrow">
+                            <a class="nav-link dropdown-toggle app-user-trigger" href="#" id="userDropdown" role="button" data-bs-toggle="dropdown" aria-label="账户菜单">
+                                <span class="app-user-avatar">S</span>
+                            </a>
+                            <div class="dropdown-menu dropdown-menu-end shadow animated--grow-in">
+                                <a class="dropdown-item" href="/logout" data-toggle="modal" data-target="#logoutModal">
+                                    <i class="fas fa-sign-out-alt fa-sm fa-fw mr-2 text-gray-400"></i>
+                                    退出登录
+                                </a>
+                            </div>
+                        </li>
+                    </ul>
+                </nav>
+                <!-- End of Topbar -->
+
+                <!-- Begin Page Content -->
+                <div class="container-fluid">
+                    
+<div class="page-hero">
+    <div class="page-hero-actions">
+        <a class="btn btn-success" href="/api/export_attendance?">
+            导出 Excel
+        </a>
+        <button class="btn btn-outline-secondary" type="button" id="printHistoryBtn">打印报表</button>
+        
+        <button class="btn btn-danger" type="submit" form="attendanceDeleteForm" id="deleteSelectedAttendanceBtn">删除所选</button>
+        
+    </div>
+</div>
+
+<div class="card shadow mb-3">
+    <div class="card-body">
+        <form class="row g-2 align-items-end" method="get" action="/history">
+            <div class="col-md-2">
+                <label class="form-label small text-muted">开始日期</label>
+                <input class="form-control" type="text" name="start_date" placeholder="YYYY/MM/DD" inputmode="numeric" value="">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small text-muted">结束日期</label>
+                <input class="form-control" type="text" name="end_date" placeholder="YYYY/MM/DD" inputmode="numeric" value="">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small text-muted">课程选择</label>
+                <select class="form-select" name="course_id">
+                    <option value="">所有课程</option>
+                    
+                    <option value="26" >C语言程序设计</option>
+                    
+                    <option value="27" >计算机组成原理</option>
+                    
+                    <option value="28" >数据结构</option>
+                    
+                    <option value="29" >计算机网络</option>
+                    
+                    <option value="31" >信号与系统</option>
+                    
+                    <option value="32" >大学英语</option>
+                    
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small text-muted">学院</label>
+                <select class="form-select" name="college">
+                    <option value="">所有学院</option>
+                    
+                    <option value="计算机学院" >计算机学院</option>
+                    
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small text-muted">姓名/学号</label>
+                <input class="form-control" type="search" name="search_query" placeholder="输入姓名或学号" value="">
+            </div>
+            <div class="col-12 d-flex gap-2">
+                <button class="btn btn-primary" type="submit">查询</button>
+                <a class="btn btn-outline-secondary" href="/history">重置</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-md-4">
+        <div class="metric-tile">
+            <div class="text-muted small">查询结果总数</div>
+            <div class="fs-4 fw-bold">0</div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="metric-tile">
+            <div class="text-muted small">出勤率</div>
+            <div class="fs-4 fw-bold">0%</div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="metric-tile">
+            <div class="text-muted small">平均置信度</div>
+            <div class="fs-4 fw-bold">
+                
+                -
+                
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card shadow mb-3">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-2">
+            <div class="fw-bold">缺勤统计</div>
+        </div>
+        <div class="row g-2 mb-3">
+            <div class="col-4">
+                <div class="metric-tile text-center">
+                    <div class="text-muted small">应到</div>
+                    <div class="fs-5 fw-bold">17</div>
+                </div>
+            </div>
+            <div class="col-4">
+                <div class="metric-tile text-center">
+                    <div class="text-muted small">实到</div>
+                    <div class="fs-5 fw-bold text-success">0</div>
+                </div>
+            </div>
+            <div class="col-4">
+                <div class="metric-tile text-center">
+                    <div class="text-muted small">缺勤</div>
+                    <div class="fs-5 fw-bold text-danger">0</div>
+                </div>
+            </div>
+        </div>
+        <div class="table-responsive" style="max-height: 260px;">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width: 140px;">学号</th>
+                        <th style="width: 160px;">姓名</th>
+                        <th>班级</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    
+                        <tr><td colspan="3" class="text-muted">暂无缺勤</td></tr>
+                    
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card shadow">
+    <div class="card-body">
+        <form id="attendanceDeleteForm" action="/api/delete_attendance" method="post">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width: 44px;">
+                                <input class="form-check-input" type="checkbox" id="attendanceSelectAll" >
+                            </th>
+                            <th style="width: 70px;">序号</th>
+                            <th style="width: 140px;">学号</th>
+                            <th style="width: 120px;">姓名</th>
+                            <th style="width: 160px;">班级</th>
+                            <th style="width: 180px;">课程</th>
+                            <th style="width: 190px;">考勤时间</th>
+                            <th style="width: 110px;">置信度</th>
+                            <th style="width: 110px;">状态</th>
+                            <th style="width: 110px;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        
+                    </tbody>
+                </table>
+            </div>
+        </form>
+
+        <div class="d-flex justify-content-between align-items-center">
+            <div class="text-muted small">第 1 / 1 页</div>
+            <div class="btn-group">
+                <a class="btn btn-outline-secondary btn-sm disabled"
+                   href="/history?page=0&page_size=20">上一页</a>
+                <a class="btn btn-outline-secondary btn-sm disabled"
+                   href="/history?page=2&page_size=20">下一页</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="attendanceDetailModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">考勤详情</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-2">
+            <div class="col-6">
+                <div class="text-muted small">学号</div>
+                <div class="fw-bold" id="detailStudentId">-</div>
+            </div>
+            <div class="col-6">
+                <div class="text-muted small">姓名</div>
+                <div class="fw-bold" id="detailName">-</div>
+            </div>
+            <div class="col-12">
+                <div class="text-muted small">班级</div>
+                <div class="fw-bold" id="detailClassName">-</div>
+            </div>
+            <div class="col-12">
+                <div class="text-muted small">课程</div>
+                <div class="fw-bold" id="detailCourseName">-</div>
+            </div>
+            <div class="col-12">
+                <div class="text-muted small">考勤时间</div>
+                <div class="fw-bold" id="detailTimestamp">-</div>
+            </div>
+            <div class="col-6">
+                <div class="text-muted small">置信度</div>
+                <div class="fw-bold" id="detailConfidence">-</div>
+            </div>
+            <div class="col-6">
+                <div class="text-muted small">状态</div>
+                <div class="fw-bold" id="detailStatus">-</div>
+            </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const selectAll = document.getElementById('attendanceSelectAll');
+    const rows = Array.from(document.querySelectorAll('input.attendance-row'));
+    const form = document.getElementById('attendanceDeleteForm');
+
+    const selectedIds = () => rows.filter(x => x.checked).map(x => x.value);
+
+    if (selectAll) {
+        selectAll.addEventListener('change', () => {
+            rows.forEach(x => { x.checked = selectAll.checked; });
+        });
+    }
+    rows.forEach(x => x.addEventListener('change', () => {
+        if (!selectAll) return;
+        const allChecked = rows.length > 0 && rows.every(y => y.checked);
+        const noneChecked = rows.every(y => !y.checked);
+        selectAll.indeterminate = !allChecked && !noneChecked;
+        selectAll.checked = allChecked;
+    }));
+
+    if (form) {
+        form.addEventListener('submit', (e) => {
+            const ids = selectedIds();
+            if (!ids.length) {
+                e.preventDefault();
+                alert('请先选择要删除的考勤记录');
+                return;
+            }
+            if (!confirm(`确定删除选中的 ${ids.length} 条考勤记录吗？`)) {
+                e.preventDefault();
+            }
+        });
+    }
+});
+</script>
+
+                </div>
+                <!-- /.container-fluid -->
+
+            </div>
+            <!-- End of Main Content -->
+
+            <!-- Footer -->
+            <footer class="sticky-footer bg-white mt-auto py-3">
+                <div class="container my-auto">
+                    <div class="copyright text-center my-auto">
+                        <!-- Copyright removed as requested -->
+                    </div>
+                </div>
+            </footer>
+            <!-- End of Footer -->
+
+        </div>
+        <!-- End of Content Wrapper -->
+
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/js/main.js"></script>
+</body>
+</html>

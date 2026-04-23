@@ -1,9 +1,8 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="d-flex align-items-center justify-content-between mb-3">
-    <h2 class="mb-0">考勤记录</h2>
-    <div class="d-flex gap-2">
+<div class="page-hero">
+    <div class="page-hero-actions">
         <a class="btn btn-success" href="/api/export_attendance?{% if current_course_id %}course_id={{ current_course_id }}&{% endif %}{% if current_college %}college={{ current_college }}&{% endif %}{% if current_search %}search_query={{ current_search }}&{% endif %}{% if current_start_date %}start_date={{ current_start_date }}&{% endif %}{% if current_end_date %}end_date={{ current_end_date }}&{% endif %}">
             导出 Excel
         </a>
@@ -57,19 +56,19 @@
 
 <div class="row g-3 mb-3">
     <div class="col-md-4">
-        <div class="border rounded p-3 bg-white shadow-sm">
+        <div class="metric-tile">
             <div class="text-muted small">查询结果总数</div>
             <div class="fs-4 fw-bold">{{ stats.total_count }}</div>
         </div>
     </div>
     <div class="col-md-4">
-        <div class="border rounded p-3 bg-white shadow-sm">
+        <div class="metric-tile">
             <div class="text-muted small">出勤率</div>
             <div class="fs-4 fw-bold">{{ stats.attendance_rate }}%</div>
         </div>
     </div>
     <div class="col-md-4">
-        <div class="border rounded p-3 bg-white shadow-sm">
+        <div class="metric-tile">
             <div class="text-muted small">平均置信度</div>
             <div class="fs-4 fw-bold">
                 {% if stats.avg_confidence is not none %}
@@ -89,19 +88,19 @@
         </div>
         <div class="row g-2 mb-3">
             <div class="col-4">
-                <div class="border rounded p-2 text-center">
+                <div class="metric-tile text-center">
                     <div class="text-muted small">应到</div>
                     <div class="fs-5 fw-bold">{{ stats.expected_count }}</div>
                 </div>
             </div>
             <div class="col-4">
-                <div class="border rounded p-2 text-center">
+                <div class="metric-tile text-center">
                     <div class="text-muted small">实到</div>
                     <div class="fs-5 fw-bold text-success">{{ stats.actual_count }}</div>
                 </div>
             </div>
             <div class="col-4">
-                <div class="border rounded p-2 text-center">
+                <div class="metric-tile text-center">
                     <div class="text-muted small">缺勤</div>
                     <div class="fs-5 fw-bold text-danger">{{ stats.absent_count }}</div>
                 </div>
