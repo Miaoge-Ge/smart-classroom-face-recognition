@@ -29,6 +29,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from starlette.websockets import WebSocketDisconnect
 from core.security import verify_password, get_password_hash
+from core.csrf import CSRFMiddleware, CSRF_TOKEN_NAME, generate_csrf_token, set_csrf_cookie
 
 # Add root to path FIRST before importing local modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -125,6 +126,11 @@ logger = logging.getLogger("systems.web")
 
 def _build_temp_face_file_path(final_path: str) -> str:
     return f"{final_path}.tmp.{os.getpid()}.{int(time.time() * 1000)}"
+
+
+def _ensure_csrf_token(request: Request) -> str:
+    token = request.cookies.get(CSRF_TOKEN_NAME)
+    return token or generate_csrf_token()
 
 
 _RECOGNITION_MODEL_DIR_ALIASES = {
@@ -725,9 +731,17 @@ async def lifespan(app: FastAPI):
         pass
 
 app = FastAPI(lifespan=lifespan, title="智慧课堂考勤管理系统")
+app.add_middleware(CSRFMiddleware)
 
 app.mount("/static", StaticFiles(directory="web/static"), name="static")
 templates = Jinja2Templates(directory="web/templates")
+
+def _render_template(request: Request, template_name: str, context: dict, status_code: int = 200):
+    csrf_token = _ensure_csrf_token(request)
+    merged = {"request": request, "csrf_token": csrf_token, **context}
+    response = templates.TemplateResponse(template_name, merged, status_code=status_code)
+    set_csrf_cookie(response, csrf_token)
+    return response
 
 
 @app.middleware("http")
@@ -851,7 +865,7 @@ def _normalize_tabular_text(value) -> str:
 
 @app.get("/login")
 async def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
+    return _render_template(request, "login.html", {})
 
 @app.post("/login")
 async def login_submit(request: Request, db: Session = Depends(get_db), username: str = Form(...), password: str = Form(...)):
@@ -862,6 +876,7 @@ async def login_submit(request: Request, db: Session = Depends(get_db), username
         )
         redirect_url = "/" if account.role in {"admin", "teacher"} else "/my_attendance"
         response = RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
+        csrf_token = generate_csrf_token()
         response.set_cookie(
             key="access_token",
             value=access_token,
@@ -869,6 +884,7 @@ async def login_submit(request: Request, db: Session = Depends(get_db), username
             samesite="lax",
             secure=(request.url.scheme == "https"),
         )
+        set_csrf_cookie(response, csrf_token)
         write_audit_log(
             actor_username=account.username,
             actor_role=account.role,
@@ -884,6 +900,7 @@ async def login_submit(request: Request, db: Session = Depends(get_db), username
     if legacy_admin and verify_password(password, legacy_admin.hashed_password):
         access_token = create_access_token(username=legacy_admin.username, role="admin", full_name=legacy_admin.full_name)
         response = RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
+        csrf_token = generate_csrf_token()
         response.set_cookie(
             key="access_token",
             value=access_token,
@@ -891,6 +908,7 @@ async def login_submit(request: Request, db: Session = Depends(get_db), username
             samesite="lax",
             secure=(request.url.scheme == "https"),
         )
+        set_csrf_cookie(response, csrf_token)
         write_audit_log(
             actor_username=legacy_admin.username,
             actor_role="admin",
@@ -911,7 +929,7 @@ async def login_submit(request: Request, db: Session = Depends(get_db), username
         ip=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
-    return templates.TemplateResponse("login.html", {"request": request, "error": "用户名或密码错误"})
+    return _render_template(request, "login.html", {"error": "用户名或密码错误"})
 
 @app.get("/logout")
 async def logout(request: Request, user=Depends(login_required)):
@@ -1308,6 +1326,19 @@ async def create_attendance_task(
         return RedirectResponse(url="/attendance_tasks", status_code=303)
 
     class_label = ",".join(class_names)
+    duplicate_task = (
+        db.query(AttendanceTask.task_id)
+        .filter(
+            AttendanceTask.course_id == int(course_id),
+            AttendanceTask.title == title,
+            AttendanceTask.class_name == class_label,
+            AttendanceTask.status == "draft",
+        )
+        .first()
+    )
+    if duplicate_task:
+        return RedirectResponse(url="/attendance_tasks?error=已存在相同草稿任务", status_code=303)
+
     task = AttendanceTask(
         title=title,
         course_id=int(course_id),
@@ -1944,8 +1975,7 @@ async def settings_page(request: Request, user=Depends(require_roles("admin"))):
         current_config["recognition"].get("weights_path")
     )
             
-    return templates.TemplateResponse("settings.html", {
-        "request": request,
+    return _render_template(request, "settings.html", {
         "user": user,
         "det_models": det_models,
         "rec_models": rec_models,
@@ -1970,13 +2000,15 @@ async def update_settings(
     force_https: bool = Form(False),
     user=Depends(require_roles("admin"))
 ):
+    old_config = None
     try:
-        config = load_raw_config()
+        old_config = load_raw_config()
+        config = dict(old_config)
         rec_model = _normalize_recognition_model_choice(rec_model)
         rec_model = str(rec_model or "").replace("\\", "/")
         if rec_model.lower().startswith("models/weights/recognition/"):
             rec_model = rec_model.split("models/weights/recognition/", 1)[1]
-            
+
         # Update Config
         config.setdefault("detector", {})
         config.setdefault("recognition", {})
@@ -1996,11 +2028,11 @@ async def update_settings(
         config["performance"]["max_inference_concurrency"] = int(max_inference_concurrency)
         config["performance"]["max_ws_connections"] = int(max_ws_connections)
         config["security"]["force_https"] = bool(force_https)
-        
+
         save_raw_config(config)
-            
-        # Reload Service
         init_service()
+        if service is None:
+            raise RuntimeError(service_init_error or "服务初始化失败")
 
         write_audit_log(
             actor_username=user.get("username"),
@@ -2028,11 +2060,17 @@ async def update_settings(
                 "security": {"force_https": bool(force_https)},
             },
         )
-        
+
         return RedirectResponse(url="/settings?success=1", status_code=303)
-        
+
     except Exception as e:
         logger.exception("update_settings failed: %s", e)
+        if old_config is not None:
+            try:
+                save_raw_config(old_config)
+                init_service()
+            except Exception as rollback_error:
+                logger.exception("update_settings rollback failed: %s", rollback_error)
         return {"status": "error", "message": "保存设置失败，请查看日志"}
 
 @app.get("/api/runtime_settings")
@@ -2720,23 +2758,23 @@ async def import_students(request: Request, file: UploadFile = File(...), db: Se
     try:
         contents = await file.read()
         df = pd.read_excel(io.BytesIO(contents))
-        
+
         # Check columns
         required_columns = ['姓名', '学号', '性别', '班级', '学院']
         if not all(col in df.columns for col in required_columns):
             return {"status": "error", "message": f"Excel必须包含列: {','.join(required_columns)}"}
-            
+
         count = 0
         for _, row in df.iterrows():
             name = _normalize_tabular_text(row.get('姓名'))
             student_id = _normalize_tabular_text(row.get('学号'))
             if not name or not student_id:
                 continue
-            
+
             # Skip if exists (by student_id)
             if db.query(Student).filter(Student.student_no == student_id).first():
                 continue
-                
+
             new_student = Student(
                 name=name,
                 student_no=student_id,
@@ -2747,7 +2785,7 @@ async def import_students(request: Request, file: UploadFile = File(...), db: Se
             )
             db.add(new_student)
             count += 1
-            
+
         db.commit()
         write_audit_log(
             actor_username=user.get("username"),
@@ -2761,7 +2799,9 @@ async def import_students(request: Request, file: UploadFile = File(...), db: Se
         )
         return RedirectResponse(url="/students", status_code=303)
     except Exception as e:
-        return {"status": "error", "message": f"导入失败: {str(e)}"}
+        db.rollback()
+        logger.exception("import_students failed: %s", e)
+        return {"status": "error", "message": "导入失败，请检查文件格式或查看日志"}
 
 if __name__ == "__main__":
     import uvicorn

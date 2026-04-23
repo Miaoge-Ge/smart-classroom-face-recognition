@@ -42,6 +42,7 @@
                         </div>
                         {% endif %}
                         <form action="/login" method="post">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <div class="form-floating mb-3">
                                     <input type="text" class="form-control" id="username" name="username" placeholder="" required autofocus>
                                     <label for="username">用户名</label>
