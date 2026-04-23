@@ -121,6 +121,12 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 service = None
 service_init_error = None
 logger = logging.getLogger("systems.web")
+
+
+def _build_temp_face_file_path(final_path: str) -> str:
+    return f"{final_path}.tmp.{os.getpid()}.{int(time.time() * 1000)}"
+
+
 _RECOGNITION_MODEL_DIR_ALIASES = {
     "fastcontextface": "nexnet",
 }
@@ -684,29 +690,26 @@ async def lifespan(app: FastAPI):
     app.state.dedup_lock = asyncio.Lock()
     app.state.dedup_cache = {}
     app.state.dedup_cleanup = asyncio.create_task(_dedup_cleanup_worker(app))
-    # Init Default Admin if not exists
+    # 安全说明：不再在启动时自动创建或重置固定弱口令管理员账户。
+    # 若系统中不存在管理员，仅记录告警，避免在生产环境暴露默认凭据。
     db = SessionLocal()
-    admin_account = db.query(UserAccount).filter(UserAccount.username == "admin").first()
-    if not admin_account:
-        hashed = get_password_hash("admin123")
-        admin_account = UserAccount(username="admin", hashed_password=hashed, role="admin", full_name="System Admin")
-        db.add(admin_account)
-        db.commit()
-        print("Default admin created (admin/admin123)")
-    else:
-        if not admin_account.hashed_password:
-            admin_account.hashed_password = get_password_hash("admin123")
-            db.add(admin_account)
-            db.commit()
-            print("Default admin password reset (admin/admin123)")
-
-    legacy_admin = db.query(AdminUser).filter(AdminUser.username == "admin").first()
-    if not legacy_admin:
-        hashed = get_password_hash("admin123")
-        legacy_admin = AdminUser(username="admin", hashed_password=hashed, full_name="System Admin")
-        db.add(legacy_admin)
-        db.commit()
-    db.close()
+    try:
+        admin_account = (
+            db.query(UserAccount.user_id)
+            .filter(UserAccount.role == "admin")
+            .first()
+        )
+        legacy_admin = (
+            db.query(AdminUser.id)
+            .filter(AdminUser.username == "admin")
+            .first()
+        )
+        if not admin_account and not legacy_admin:
+            logger.warning(
+                "未检测到管理员账户。出于安全原因，系统不会自动创建默认 admin/admin123，请通过受控方式初始化管理员账号。"
+            )
+    finally:
+        db.close()
     
     init_service()
     
@@ -1485,7 +1488,8 @@ async def add_course(
         )
         return RedirectResponse(url="/courses", status_code=303)
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        logger.exception("add_course failed: %s", e)
+        return {"status": "error", "message": "创建课程失败，请查看日志"}
 
 @app.post("/api/delete_course")
 async def delete_course(request: Request, course_id: int = Form(...), db: Session = Depends(get_db), user=Depends(require_roles("admin"))):
@@ -2028,7 +2032,8 @@ async def update_settings(
         return RedirectResponse(url="/settings?success=1", status_code=303)
         
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        logger.exception("update_settings failed: %s", e)
+        return {"status": "error", "message": "保存设置失败，请查看日志"}
 
 @app.get("/api/runtime_settings")
 async def runtime_settings_api(user=Depends(login_required)):
@@ -2407,7 +2412,8 @@ async def register_face(
     # Ensure data/faces exists
     faces_dir = "data/faces"
     os.makedirs(faces_dir, exist_ok=True)
-    
+    temp_file_path = None
+
     try:
         name = (name or "").strip()
         student_no = (student_no or "").strip()
@@ -2432,17 +2438,18 @@ async def register_face(
 
         embedding_raw = feature.detach().cpu().numpy().astype(np.float32).tobytes()
         embedding_enc = encrypt_to_b64(embedding_raw)
+        encrypted_face_bytes = encrypt_bytes(raw_bytes)
 
         db = SessionLocal()
         try:
             student = db.query(Student).filter(Student.student_no == student_no).first()
             if not student:
                 student = Student(
-                    name=name, 
+                    name=name,
                     student_no=student_no,
                     college=college,
                     gender=gender,
-                    class_name=class_name
+                    class_name=class_name,
                 )
                 db.add(student)
                 db.flush()
@@ -2456,15 +2463,19 @@ async def register_face(
                 student.class_name = class_name
 
             file_path = os.path.join(faces_dir, f"{student.student_id}.enc")
-            with open(file_path, "wb") as f:
-                f.write(encrypt_bytes(raw_bytes))
+            temp_file_path = _build_temp_face_file_path(file_path)
+            with open(temp_file_path, "wb") as f:
+                f.write(encrypted_face_bytes)
+
             student.face_image_path = file_path
             student.face_embedding_enc = embedding_enc
             if getattr(service, "model_sig", None):
                 student.face_embedding_model_sig = service.model_sig
-            service.upsert_known_face(student.student_id, student.name, feature, student.student_no)
-            
+
             db.commit()
+            os.replace(temp_file_path, file_path)
+            temp_file_path = None
+            service.upsert_known_face(student.student_id, student.name, feature, student.student_no)
             write_audit_log(
                 actor_username=user.get("username"),
                 actor_role=user.get("role"),
@@ -2475,14 +2486,22 @@ async def register_face(
                 user_agent=request.headers.get("user-agent"),
                 details={"name": name, "student_no": student_no, "college": college, "gender": gender, "class_name": class_name},
             )
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
-        
+
         return RedirectResponse(url="/students", status_code=303)
-            
+
     except Exception as e:
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+            except Exception:
+                logger.warning("register_face temp file cleanup failed: %s", temp_file_path)
         logger.exception("register_face failed: %s", e)
-        return RedirectResponse(url=f"/students?error={str(e)}", status_code=303)
+        return RedirectResponse(url="/students?error=保存失败，请查看日志", status_code=303)
 
 @app.post("/api/delete_student")
 async def delete_student(request: Request, student_id: int = Form(...), db: Session = Depends(get_db), user=Depends(require_roles("admin"))):
@@ -2516,7 +2535,8 @@ async def delete_student(request: Request, student_id: int = Form(...), db: Sess
                 
         return RedirectResponse(url="/students", status_code=303)
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        logger.exception("delete_student failed: %s", e)
+        return {"status": "error", "message": "删除学生失败，请查看日志"}
 
 @app.get("/api/student_face")
 async def student_face(student_id: int, db: Session = Depends(get_db), user=Depends(require_roles("admin"))):
@@ -2556,12 +2576,13 @@ async def update_student(
         return {"status": "error", "message": "服务未初始化"}
 
     db = SessionLocal()
+    temp_file_path = None
+    pending_feature = None
     try:
         stu = db.query(Student).filter(Student.student_id == student_id).first()
         if not stu:
             return RedirectResponse(url="/students?error=学生不存在", status_code=303)
 
-        old_name = stu.name
         new_student_no = (student_no or "").strip()
         new_name = (name or "").strip()
         if not new_student_no:
@@ -2599,7 +2620,8 @@ async def update_student(
             faces_dir = "data/faces"
             os.makedirs(faces_dir, exist_ok=True)
             file_path = os.path.join(faces_dir, f"{stu.student_id}.enc")
-            with open(file_path, "wb") as f:
+            temp_file_path = _build_temp_face_file_path(file_path)
+            with open(temp_file_path, "wb") as f:
                 f.write(encrypt_bytes(raw_bytes))
 
             stu.face_image_path = file_path
@@ -2607,14 +2629,20 @@ async def update_student(
             stu.face_embedding_enc = encrypt_to_b64(embedding_raw)
             if getattr(service, "model_sig", None):
                 stu.face_embedding_model_sig = service.model_sig
-            service.upsert_known_face(stu.student_id, stu.name, feature, stu.student_no)
+            pending_feature = feature
 
-        if service:
+        db.commit()
+
+        if temp_file_path:
+            os.replace(temp_file_path, stu.face_image_path)
+            temp_file_path = None
+        if pending_feature is not None:
+            service.upsert_known_face(stu.student_id, stu.name, pending_feature, stu.student_no)
+        elif service:
             existing_feature = service.known_faces.get(int(stu.student_id))
             if existing_feature is not None:
                 service.upsert_known_face(stu.student_id, stu.name, existing_feature, stu.student_no)
 
-        db.commit()
         write_audit_log(
             actor_username=user.get("username"),
             actor_role=user.get("role"),
@@ -2628,8 +2656,13 @@ async def update_student(
         return RedirectResponse(url="/students", status_code=303)
     except Exception as e:
         db.rollback()
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+            except Exception:
+                logger.warning("update_student temp file cleanup failed: %s", temp_file_path)
         logger.exception("update_student failed: %s", e)
-        return RedirectResponse(url=f"/students?error={str(e)}", status_code=303)
+        return RedirectResponse(url="/students?error=保存失败，请查看日志", status_code=303)
     finally:
         db.close()
 
