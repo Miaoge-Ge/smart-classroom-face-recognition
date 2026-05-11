@@ -28,7 +28,7 @@ preprocess:
 recognition:
   device: auto
   embedding_size: 512
-  similarity_threshold: 0.6
+  similarity_threshold: 0.75
   weights_path: models/weights/recognition/resnet50/AdaFace.pth
 security:
-  force_https: false 
+  force_https: false

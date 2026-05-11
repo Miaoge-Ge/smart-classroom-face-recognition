@@ -32,6 +32,17 @@ web/static/uploads/
 .DS_Store
 Thumbs.db
 
+# Claude AI
+.claude/
+
+# Progress tracking
+.tocodex/
+
+# Temp / Dev helper scripts (not for production)
+*.ps1
+c
+scripts/check_admin.py
+
 # Model Weights (Large Binary Files - Download separately)
 models/weights/**/*.pt
 models/weights/**/*.pth

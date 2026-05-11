@@ -1,11 +1,74 @@
 {% extends "base.html" %}
 
 {% block content %}
+{% if request.query_params.get('error') %}
+<div class="alert alert-danger alert-dismissible fade show" role="alert">
+  {{ request.query_params.get('error') }}
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+{% if request.query_params.get('success') %}
+<div class="alert alert-success alert-dismissible fade show" role="alert">
+  {{ request.query_params.get('success') }}
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
 <div class="page-hero">
     <div class="page-hero-actions">
-        <button class="btn btn-primary shadow-sm" data-bs-toggle="modal" data-bs-target="#addCourseModal">
+        <button class="btn btn-primary shadow-sm" type="button" data-bs-toggle="collapse" data-bs-target="#addCourseForm">
         <i class="fas fa-plus fa-sm text-white-50"></i> 新增课程
         </button>
+    </div>
+</div>
+
+<!-- Add Course Form (collapsible, no modal) -->
+<div class="collapse" id="addCourseForm">
+    <div class="card shadow mb-4">
+        <div class="card-header py-3">
+            <h6 class="m-0 font-weight-bold text-primary">新增课程</h6>
+        </div>
+        <div class="card-body">
+            <form action="/api/courses" method="post">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <label class="form-label">课程代码</label>
+                        <input type="text" class="form-control" name="code" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">课程名称</label>
+                        <input type="text" class="form-control" name="name" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">授课教师</label>
+                        <input type="text" class="form-control" name="teacher" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">上课地点</label>
+                        <input type="text" class="form-control" name="location">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">上课开始时间</label>
+                        <input type="datetime-local" class="form-control" name="start_time" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">上课结束时间</label>
+                        <input type="datetime-local" class="form-control" name="end_time">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">上课班级（可多选）</label>
+                        <select class="form-select" name="class_names" multiple size="3">
+                            {% for cn in classes %}
+                            <option value="{{ cn }}">{{ cn }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-12 text-end">
+                        <button type="button" class="btn btn-secondary" data-bs-toggle="collapse" data-bs-target="#addCourseForm">取消</button>
+                        <button type="submit" class="btn btn-primary">保存</button>
+                    </div>
+                </div>
+            </form>
+        </div>
     </div>
 </div>
 
@@ -58,57 +121,5 @@
             </table>
         </div>
     </div>
-</div>
-
-<!-- Add Course Modal -->
-<div class="modal fade" id="addCourseModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title">新增课程</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <div class="modal-body">
-        <form action="/api/courses" method="post">
-            <div class="mb-3">
-                <label class="form-label">课程代码</label>
-                <input type="text" class="form-control" name="code" required>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">课程名称</label>
-                <input type="text" class="form-control" name="name" required>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">授课教师</label>
-                <input type="text" class="form-control" name="teacher" required>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">上课开始时间</label>
-                <input type="datetime-local" class="form-control" name="start_time" required>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">上课结束时间</label>
-                <input type="datetime-local" class="form-control" name="end_time">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">上课班级</label>
-                <select class="form-select" name="class_names" multiple required size="5">
-                    {% for cn in classes %}
-                    <option value="{{ cn }}">{{ cn }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">上课地点</label>
-                <input type="text" class="form-control" name="location">
-            </div>
-            <div class="text-end">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="submit" class="btn btn-primary">保存</button>
-            </div>
-        </form>
-      </div>
-    </div>
-  </div>
 </div>
 {% endblock %}

@@ -701,7 +701,7 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         admin_account = (
-            db.query(UserAccount.user_id)
+            db.query(UserAccount.id)
             .filter(UserAccount.role == "admin")
             .first()
         )
@@ -954,7 +954,7 @@ async def index(request: Request, user=Depends(require_roles("admin", "teacher")
     else:
         courses = db.query(Course).filter(Course.course_no != "UNKNOWN").all()
 
-    return templates.TemplateResponse("index.html", {"request": request, "user": user, "courses": courses, "title": "实时监控"})
+    return _render_template(request, "index.html", {"user": user, "courses": courses, "title": "实时监控"})
 
 @app.get("/my_attendance")
 async def my_attendance_page(request: Request, user=Depends(require_roles("student")), db: Session = Depends(get_db)):
@@ -980,10 +980,7 @@ async def my_attendance_page(request: Request, user=Depends(require_roles("stude
                 }
             )
 
-    return templates.TemplateResponse(
-        "my_attendance.html",
-        {"request": request, "user": user, "records": records, "title": "我的考勤"},
-    )
+    return _render_template(request, "my_attendance.html", {"user": user, "records": records, "title": "我的考勤"})
 
 @app.get("/my_courses")
 async def my_courses_page(request: Request, user=Depends(require_roles("teacher")), db: Session = Depends(get_db)):
@@ -1006,10 +1003,7 @@ async def my_courses_page(request: Request, user=Depends(require_roles("teacher"
             }
         )
 
-    return templates.TemplateResponse(
-        "my_courses.html",
-        {"request": request, "user": user, "courses": course_rows, "title": "我的课程"},
-    )
+    return _render_template(request, "my_courses.html", {"user": user, "courses": course_rows, "title": "我的课程"})
 
 @app.get("/students")
 async def students_page(
@@ -1055,10 +1049,7 @@ async def students_page(
     classes = db.query(Student.class_name).distinct().all()
     classes = [c[0] for c in classes if c[0]]
     
-    return templates.TemplateResponse(
-        "students.html",
-        {
-            "request": request,
+    return _render_template(request, "students.html", {
             "students": students,
             "classes": classes,
             "current_class": class_name,
@@ -1069,8 +1060,7 @@ async def students_page(
             "total_pages": total_pages,
             "user": user,
             "title": "学生数据管理",
-        },
-    )
+    })
 
 @app.get("/history")
 async def history_page(
@@ -1196,8 +1186,7 @@ async def history_page(
     )
     course_map = {c.course_id: c.course_name for c in courses}
 
-    return templates.TemplateResponse("history.html", {
-        "request": request, 
+    return _render_template(request, "history.html", {
         "records": history_data, 
         "colleges": colleges,
         "courses": courses,
@@ -1260,10 +1249,7 @@ async def attendance_tasks_page(request: Request, user=Depends(require_roles("ad
             }
         )
 
-    return templates.TemplateResponse(
-        "attendance_tasks.html",
-        {"request": request, "user": user, "courses": courses, "classes": classes, "tasks": items, "title": "考勤任务"},
-    )
+    return _render_template(request, "attendance_tasks.html", {"user": user, "courses": courses, "classes": classes, "tasks": items, "title": "考勤任务"})
 
 
 @app.get("/api/attendance_tasks")
@@ -1449,8 +1435,7 @@ async def courses_page(request: Request, user=Depends(require_roles("admin")), d
     courses = db.query(Course).filter(Course.course_no != "UNKNOWN").all()
     class_rows = db.query(Student.class_name).distinct().all()
     classes = [r[0] for r in class_rows if r[0]]
-    return templates.TemplateResponse("courses.html", {
-        "request": request, 
+    return _render_template(request, "courses.html", {
         "courses": courses,
         "classes": classes,
         "user": user,
@@ -1465,15 +1450,13 @@ async def add_course(
     teacher: str = Form(...),
     start_time: str = Form(None),
     end_time: str = Form(None),
-    schedule: str = Form(None),
     location: str = Form(None),
+    class_names: list[str] = Form([]),
     db: Session = Depends(get_db),
     user=Depends(require_roles("admin"))
 ):
     try:
-        form = await request.form()
-        class_names = [str(x).strip() for x in (form.getlist("class_names") if form else []) if str(x).strip()]
-        class_label = ",".join(class_names) if class_names else None
+        class_label = ",".join(c.strip() for c in class_names if c.strip()) if class_names else None
 
         start_dt = None
         end_dt = None
@@ -1488,7 +1471,7 @@ async def add_course(
             except Exception:
                 end_dt = None
 
-        schedule_text = (schedule or "").strip() if schedule else None
+        schedule_text = None
         if start_dt:
             if end_dt:
                 schedule_text = f"{start_dt.strftime('%Y-%m-%d %H:%M')} - {end_dt.strftime('%Y-%m-%d %H:%M')}"
@@ -1519,8 +1502,9 @@ async def add_course(
         )
         return RedirectResponse(url="/courses", status_code=303)
     except Exception as e:
+        db.rollback()
         logger.exception("add_course failed: %s", e)
-        return {"status": "error", "message": "创建课程失败，请查看日志"}
+        return RedirectResponse(url=f"/courses?error=创建课程失败：{str(e)}", status_code=303)
 
 @app.post("/api/delete_course")
 async def delete_course(request: Request, course_id: int = Form(...), db: Session = Depends(get_db), user=Depends(require_roles("admin"))):
@@ -1708,10 +1692,7 @@ async def users_page(request: Request, user=Depends(require_roles("admin")), db:
                 "student_display": student_display,
             }
         )
-    return templates.TemplateResponse(
-        "users.html",
-        {"request": request, "user": user, "accounts": items, "error": error, "success": success, "title": "权限管理"},
-    )
+    return _render_template(request, "users.html", {"user": user, "accounts": items, "error": error, "success": success, "title": "权限管理"})
 
 @app.get("/audit")
 async def audit_page(request: Request, user=Depends(require_roles("admin")), db: Session = Depends(get_db)):
@@ -1730,10 +1711,7 @@ async def audit_page(request: Request, user=Depends(require_roles("admin")), db:
                 "ip": r.ip,
             }
         )
-    return templates.TemplateResponse(
-        "audit.html",
-        {"request": request, "user": user, "rows": items, "title": "审计日志"},
-    )
+    return _render_template(request, "audit.html", {"user": user, "rows": items, "title": "审计日志"})
 
 
 @app.get("/api/audit/export")
@@ -2547,7 +2525,9 @@ async def delete_student(request: Request, student_id: int = Form(...), db: Sess
         stu = db.query(Student).filter(Student.student_id == student_id).first()
         if stu:
             deleted = {"student_id": stu.student_id, "name": stu.name, "student_no": stu.student_no}
-            db.query(UserAccount).filter(UserAccount.student_id == student_id).update({"student_id": None})
+            db.query(UserAccount).filter(UserAccount.student_id == student_id).update(
+                {"student_id": None}, synchronize_session=False
+            )
             db.query(Attendance).filter(Attendance.student_id == student_id).delete(synchronize_session=False)
             # Delete file
             if stu.face_image_path and os.path.exists(stu.face_image_path):
